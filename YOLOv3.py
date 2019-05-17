@@ -61,7 +61,7 @@ class YOLOv3:
             self._create_pretraining_saver()
             self.save_weight = self._save_pretraining_weight
             self.train_one_epoch = self._train_pretraining_epoch
-            self.test_one_batch = self._test_one_pretraining_batch
+            self.test_one_image = self._test_one_pretraining_batch
             if self.mode == 'train':
                 self._create_pretraining_summary()
         else:
@@ -70,7 +70,7 @@ class YOLOv3:
             self._create_detection_saver()
             self.save_weight = self._save_detection_weight
             self.train_one_epoch = self._train_detection_epoch
-            self.test_one_batch = self._test_one_detection_image
+            self.test_one_image = self._test_one_detection_image
             if self.mode == 'train':
                 self._create_detection_summary()
         self._init_session()
