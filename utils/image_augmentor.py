@@ -172,7 +172,7 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
                         lambda: image
                 )
         image = tf.cond(bcs[2] <= color_jitter_prob,
-                        lambda: tf.image.adjust_brightness(image, tf.random_uniform([], 0.8, 1.2)),
+                        lambda: tf.image.adjust_hue(image, tf.random_uniform([], -0.1, 0.1)),
                         lambda: image
                 )
 
