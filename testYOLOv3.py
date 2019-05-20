@@ -90,6 +90,7 @@ for i in range(epochs):
 # img = transform.resize(img, [448,448])
 # img = np.expand_dims(img, 0)
 # result = testnet.test_one_image(img)
+# id_to_clasname = {k:v for (v,k) in classname_to_ids.items()}
 # scores = result[0]
 # bbox = result[1]
 # class_id = result[2]
@@ -98,7 +99,7 @@ for i in range(epochs):
 # plt.imshow(np.squeeze(img))
 # axis = plt.gca()
 # for i in range(len(scores)):
-#     rect = patches.Rectangle((bbox[i][0],bbox[i][1]), bbox[i][2]-bbox[i][0],bbox[i][3]-bbox[i][1],linewidth=2,edgecolor='b',facecolor='none')
+#     rect = patches.Rectangle((bbox[i][1],bbox[i][0]), bbox[i][3]-bbox[i][1],bbox[i][2]-bbox[i][0],linewidth=2,edgecolor='b',facecolor='none')
 #     axis.add_patch(rect)
-#     plt.text(bbox[i][1],bbox[i][0], id_to_clasname[class_id[i]]+str(' ')+str(scores[i]), color='red')
+#     plt.text(bbox[i][1],bbox[i][0], id_to_clasname[class_id[i]]+str(' ')+str(scores[i]), color='red', fontsize=12)
 # plt.show()
