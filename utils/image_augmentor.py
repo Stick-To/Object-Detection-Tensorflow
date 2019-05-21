@@ -231,13 +231,13 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
                                 constant_values=-1.0
                             )
             return image_copy, ground_truth
-
-        if pad_truth_to is not None:
-            ground_truth = tf.pad(
-                            ground_truth_, [[0, pad_truth_to-tf.shape(ground_truth)[0]], [0, 0]],
-                            constant_values=-1.0
-                        )
-        return image, ground_truth
+        else:
+            if pad_truth_to is not None:
+                ground_truth = tf.pad(
+                                ground_truth_, [[0, pad_truth_to-tf.shape(ground_truth_)[0]], [0, 0]],
+                                constant_values=-1.0
+                            )
+            return image, ground_truth
     else:
         return image
 
