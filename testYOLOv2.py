@@ -57,7 +57,7 @@ image_augmentor_config = {
     'keep_aspect_ratios': False,
     'constant_values': 0.,
     'color_jitter_prob': 0.5,
-    'rotate_range': [0.5, -10., 10.],
+    'rotate': [0.5, -10., 10.],
     'pad_truth_to': 60,
 }
 train_gen = voc_utils.get_generator(data,
