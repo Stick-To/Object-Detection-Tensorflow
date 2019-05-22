@@ -40,13 +40,13 @@ fill in dict 'config' in test-model.py
 # Train
 run test-model.py
 
+The pre-trained vgg_16.ckpt could be downloaded from http://download.tensorflow.org/models/vgg_16_2016_08_28.tar.gz
+
 # Test
 run annotated code in test-model.py
 
-
 # Experimental Environment
 python3.7 tensorflow1.13
-
 
 # ImageNet pretraining
 see utils.tfrecord_imagenet_utils.py
