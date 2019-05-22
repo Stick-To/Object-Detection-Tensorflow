@@ -12,9 +12,11 @@ class PFPNetR:
     def __init__(self, config, data_provider):
         assert config['mode'] in ['train', 'test']
         assert config['data_format'] in ['channels_first', 'channels_last']
+        assert config['input_size'] % 64 == 0
         self.config = config
         self.data_provider = data_provider
         self.input_size = config['input_size']
+
         if config['data_format'] == 'channels_last':
             self.data_shape = [self.input_size, self.input_size, 3]
         else:
@@ -326,32 +328,32 @@ class PFPNetR:
         feat1 = tf.concat(
             [
                 fh1,
-                tf.image.resize_bilinear(fl2, [p1_h, p1_w], align_corners=True),
-                tf.image.resize_bilinear(fl3, [p1_h, p1_w], align_corners=True),
-                tf.image.resize_bilinear(fl4, [p1_h, p1_w], align_corners=True)
+                self._dconv_layer(fl2, 512 // 6, 4, 2),
+                self._dconv_layer(self._dconv_layer(fl3, 512 // 6, 4, 2), 512 // 6, 4, 2),
+                self._dconv_layer(self._dconv_layer(self._dconv_layer(fl4, 512 // 6, 4, 2), 512 // 6, 4, 2), 512 // 6, 4, 2)
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat2 = tf.concat(
             [
-                tf.image.resize_bilinear(fl1, [p2_h, p2_w], align_corners=True),
+                self._avg_pooling(fl1, 2, 2),
                 fh2,
-                tf.image.resize_bilinear(fl3, [p2_h, p2_w], align_corners=True),
-                tf.image.resize_bilinear(fl4, [p2_h, p2_w], align_corners=True)
+                self._dconv_layer(fl3, 512 // 6, 4, 2),
+                self._dconv_layer(self._dconv_layer(fl4, 512 // 6, 4, 2), 512 // 6, 4, 2)
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat3 = tf.concat(
             [
-                tf.image.resize_bilinear(fl1, [p3_h, p3_w], align_corners=True),
-                tf.image.resize_bilinear(fl2, [p3_h, p3_w], align_corners=True),
+                self._avg_pooling(fl1, 4, 4),
+                self._avg_pooling(fl2, 2, 2),
                 fh3,
-                tf.image.resize_bilinear(fl4, [p3_h, p3_w], align_corners=True)
+                self._dconv_layer(fl4, 512 // 6, 4, 2)
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat4 = tf.concat(
             [
-                tf.image.resize_bilinear(fl1, [p4_h, p4_w], align_corners=True),
-                tf.image.resize_bilinear(fl2, [p4_h, p4_w], align_corners=True),
-                tf.image.resize_bilinear(fl3, [p4_h, p4_w], align_corners=True),
+                self._avg_pooling(fl1, 8, 8),
+                self._avg_pooling(fl2, 4, 4),
+                self._avg_pooling(fl3, 2, 2),
                 fh4
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
@@ -683,14 +685,13 @@ class PFPNetR:
             name=name
         )
 
-    def _avg_pooling(self, bottom, pool_size, strides, name):
+    def _avg_pooling(self, bottom, pool_size, strides):
         return tf.layers.average_pooling2d(
             inputs=bottom,
             pool_size=pool_size,
             strides=strides,
             padding='same',
             data_format=self.data_format,
-            name=name
         )
 
     def _dropout(self, bottom, name):
