@@ -233,7 +233,8 @@ class YOLOv3:
     def _init_session(self):
         self.sess = tf.InteractiveSession()
         self.sess.run(tf.global_variables_initializer())
-        self.sess.run(self.train_initializer)
+        if self.mode == 'train':
+            self.sess.run(self.train_initializer)
 
     def _create_pretraining_saver(self):
         weights = tf.trainable_variables(scope='feature_extractor')
