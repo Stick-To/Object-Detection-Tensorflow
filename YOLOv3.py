@@ -87,11 +87,11 @@ class YOLOv3:
             self.images, self.labels = self.train_iterator.get_next()
             self.images.set_shape(shape)
             self.images = self.images - mean
-            self.labels = tf.cast(self.labels, tf.int32)
+            self.labels = tf.cast(self.labels, tf.int64)
         else:
             self.images = tf.placeholder(tf.float32, shape, name='images')
             self.images = self.images - mean
-            self.labels = tf.placeholder(tf.int32, [self.batch_size, 1], name='labels')
+            self.labels = tf.placeholder(tf.int64, [self.batch_size, 1], name='labels')
         self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
 
     def _define_detection_inputs(self):
@@ -119,11 +119,10 @@ class YOLOv3:
             conv = self._conv_layer(pyd1, self.num_classes, 1, 1)
             axes = [1, 2] if self.data_format == 'channels_last' else [2, 3]
             global_pool = tf.reduce_mean(conv, axis=axes, name='global_pool')
-            labels = tf.squeeze(tf.one_hot(self.labels, self.num_classes))
-            loss = tf.losses.softmax_cross_entropy(labels, global_pool, reduction=tf.losses.Reduction.MEAN)
+            loss = tf.losses.sparse_softmax_cross_entropy(tf.squeeze(self.labels), global_pool, reduction=tf.losses.Reduction.MEAN)
             self.pred = tf.argmax(global_pool, 1)
             self.accuracy = tf.reduce_mean(
-                tf.cast(tf.equal(self.pred, tf.argmax(self.labels, 1)), tf.float32), name='accuracy'
+                tf.cast(tf.equal(self.pred, tf.squeeze(self.labels)), tf.float32), name='accuracy'
             )
             self.loss = loss + self.weight_decay * tf.add_n(
                 [tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_extractor')]
@@ -131,7 +130,9 @@ class YOLOv3:
                 [tf.nn.l2_loss(var) for var in tf.trainable_variables('pretraining')]
             )
             optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
-            self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            self.train_op = tf.group([update_ops, train_op])
 
     def _build_detection_graph(self):
         with tf.variable_scope('feature_extractor'):
@@ -184,11 +185,11 @@ class YOLOv3:
             total_loss = tf.reduce_mean(total_loss)
             optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
             self.loss = .5 * total_loss + self.weight_decay * tf.add_n(
-                [tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_extractor')]
-            ) + self.weight_decay * tf.add_n(
-                [tf.nn.l2_loss(var) for var in tf.trainable_variables('regressor')]
+                [tf.nn.l2_loss(var) for var in tf.trainable_variables()]
             )
-            self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            self.train_op = tf.group([update_ops, train_op])
         else:
             pclasst = tf.concat([p1classt, p2classt, p3classt], axis=-2)
             pconft = tf.concat([p1conft, p2conft, p3conft], axis=-1)
@@ -244,7 +245,7 @@ class YOLOv3:
     def _create_detection_saver(self):
         weights = tf.trainable_variables(scope='feature_extractor')
         self.pretraining_weight_saver = tf.train.Saver(weights)
-        weights = weights + tf.trainable_variables('regressor')
+        weights = tf.trainable_variables()
         self.saver = tf.train.Saver(weights)
         self.best_saver = tf.train.Saver(weights)
 

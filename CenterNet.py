@@ -152,7 +152,9 @@ class CenterNet:
                 self.loss = tf.reduce_mean(total_loss) + self.weight_decay * tf.add_n(
                     [tf.nn.l2_loss(var) for var in tf.trainable_variables()])
                 optimizer = tf.train.AdamOptimizer(self.lr)
-                self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+                train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                self.train_op = tf.group([update_ops, train_op])
             else:
                 meshgrid_y = tf.expand_dims(meshgrid_y, axis=-1)
                 meshgrid_x = tf.expand_dims(meshgrid_x, axis=-1)

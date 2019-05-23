@@ -191,10 +191,12 @@ class LHRCNN:
                 rcnn_grads_and_vars = optimizer.compute_gradients(rcnn_loss, rcnn_vars)
                 train_rcnn_op = optimizer.apply_gradients(rcnn_grads_and_vars, global_step=self.global_step)
 
-                self.train_op = tf.case({tf.less(self.global_step, self.rpn_first_step): lambda: train_rpn_op,
+                train_op = tf.case({tf.less(self.global_step, self.rpn_first_step): lambda: train_rpn_op,
                                          tf.less(self.global_step, self.rcnn_first_step): lambda: train_rcnn_op,
                                          tf.less(self.global_step, self.rpn_second_step): lambda: train_rpn_op},
                                          default=lambda: train_rcnn_op, exclusive=False)
+                update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+                self.train_op = tf.group([update_ops, train_op])
                 self.loss = tf.case({tf.less(self.global_step, self.rpn_first_step): lambda: rpn_loss,
                                      tf.less(self.global_step, self.rcnn_first_step): lambda: rcnn_loss,
                                      tf.less(self.global_step, self.rpn_second_step): lambda: rpn_loss},

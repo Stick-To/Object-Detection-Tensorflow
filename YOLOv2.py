@@ -125,7 +125,9 @@ class YOLOv2:
                 [tf.nn.l2_loss(var) for var in tf.trainable_variables('pretraining')]
             )
             optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
-            self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            self.train_op = tf.group([update_ops, train_op])
 
     def _build_detection_graph(self):
         with tf.variable_scope('feature_extractor'):
@@ -227,7 +229,9 @@ class YOLOv2:
             ) + self.weight_decay * tf.add_n(
                 [tf.nn.l2_loss(var) for var in tf.trainable_variables('regressor')]
             )
-            self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            self.train_op = tf.group([update_ops, train_op])
         else:
             confidence = pclasst[0, ...] * tf.expand_dims(pconft[0, ...], axis=-1)
             npbbox_y1x1y2x2t = npbbox_y1x1y2x2t[0, ...]

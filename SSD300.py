@@ -144,7 +144,9 @@ class SSD300:
                 ) + self.weight_decay * tf.add_n(
                     [tf.nn.l2_loss(var) for var in tf.trainable_variables('regressor')]
                 )
-                self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+                self.train_op = tf.group([update_ops, train_op])
             else:
                 pbbox_yxt = pbbox_yx[0, ...]
                 pbbox_hwt = pbbox_hw[0, ...]

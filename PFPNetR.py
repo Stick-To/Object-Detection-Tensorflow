@@ -170,7 +170,9 @@ class PFPNetR:
                 self.loss = total_loss + self.weight_decay * tf.add_n(
                     [tf.nn.l2_loss(var) for var in tf.trainable_variables()]
                 )
-                self.train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+                self.train_op = tf.group([update_ops, train_op])
             else:
                 armconft = tf.nn.softmax(armpconf[0, ...])
                 odmconft = tf.nn.softmax(odmpconf[0, ...])
