@@ -317,43 +317,66 @@ class PFPNetR:
             fh3 = tf.transpose(fh3, [0, 3, 1, 2])
             fh4 = tf.transpose(fh4, [0, 3, 1, 2])
         fl1 = self._conv_layer(fh1, 512 // 6, 1, 1, activation=tf.nn.relu)
-        fl1 = self._conv_layer(fl1, 512 // 3, 3, 1, activation=tf.nn.relu)
         fl2 = self._conv_layer(fh2, 512 // 6, 1, 1, activation=tf.nn.relu)
-        fl2 = self._conv_layer(fl2, 512 // 3, 3, 1, activation=tf.nn.relu)
         fl3 = self._conv_layer(fh3, 512 // 6, 1, 1, activation=tf.nn.relu)
-        fl3 = self._conv_layer(fl3, 512 // 3, 3, 1, activation=tf.nn.relu)
         fl4 = self._conv_layer(fh4, 512 // 6, 1, 1, activation=tf.nn.relu)
-        fl4 = self._conv_layer(fl4, 512 // 3, 3, 1, activation=tf.nn.relu)
+        fl2_1 = self._dconv_layer(fl2, 512 // 6, 4, 2)
+        fl2_1 = self._conv_layer(fl2_1 + fl1, 512 // 6, 1, 1, activation=tf.nn.relu)
+        fl3_2 = self._dconv_layer(fl3, 512 // 6, 4, 2)
+        fl3_2 = self._conv_layer(fl3_2 + fl2, 512 // 6, 1, 1, activation=tf.nn.relu)
+        fl3_1 = self._dconv_layer(fl3_2, 512 // 6, 4, 2)
+        fl3_1 = self._conv_layer(fl3_1 + fl1, 512 // 6, 1, 1, activation=tf.nn.relu)
+        fl4_3 = self._dconv_layer(fl4, 512 // 6, 4, 2)
+        fl4_3 = self._conv_layer(fl4_3 + fl3, 512 // 6, 1, 1, activation=tf.nn.relu)
+        fl4_2 = self._dconv_layer(fl4_3, 512 // 6, 4, 2)
+        fl4_2 = self._conv_layer(fl4_2 + fl2, 512 // 6, 1, 1, activation=tf.nn.relu)
+        fl4_1 = self._dconv_layer(fl4_2, 512 // 6, 4, 2)
+        fl4_1 = self._conv_layer(fl4_1 + fl1, 512 // 6, 1, 1, activation=tf.nn.relu)
+
+        fl1_2 = self._avg_pooling(fl1, 2, 2)
+        fl1_2 = self._conv_layer(fl1_2, 512 // 6, 1, 1)
+        fl1_3 = self._avg_pooling(fl1_2, 2, 2)
+        fl1_3 = self._conv_layer(fl1_3, 512 // 6, 1, 1)
+        fl1_4 = self._avg_pooling(fl1_3, 2, 2)
+        fl1_4 = self._conv_layer(fl1_4, 512 // 6, 1, 1)
+
+        fl2_3 = self._avg_pooling(fl2, 2, 2)
+        fl2_3 = self._conv_layer(fl2_3, 512 // 6, 1, 1)
+        fl2_4 = self._avg_pooling(fl2_3, 2, 2)
+        fl2_4 = self._conv_layer(fl2_4, 512 // 6, 1, 1)
+
+        fl3_4 = self._avg_pooling(fl3, 2, 2)
+        fl3_4 = self._conv_layer(fl3_4, 512 // 6, 1, 1)
 
         feat1 = tf.concat(
             [
                 fh1,
-                self._dconv_layer(fl2, 512 // 6, 4, 2),
-                self._dconv_layer(self._dconv_layer(fl3, 512 // 6, 4, 2), 512 // 6, 4, 2),
-                self._dconv_layer(self._dconv_layer(self._dconv_layer(fl4, 512 // 6, 4, 2), 512 // 6, 4, 2), 512 // 6, 4, 2)
+                fl2_1,
+                fl3_1,
+                fl4_1
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat2 = tf.concat(
             [
-                self._avg_pooling(fl1, 2, 2),
+                fl1_2,
                 fh2,
-                self._dconv_layer(fl3, 512 // 6, 4, 2),
-                self._dconv_layer(self._dconv_layer(fl4, 512 // 6, 4, 2), 512 // 6, 4, 2)
+                fl3_2,
+                fl4_2
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat3 = tf.concat(
             [
-                self._avg_pooling(fl1, 4, 4),
-                self._avg_pooling(fl2, 2, 2),
+                fl1_3,
+                fl2_3,
                 fh3,
-                self._dconv_layer(fl4, 512 // 6, 4, 2)
+                fl4_3
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
         feat4 = tf.concat(
             [
-                self._avg_pooling(fl1, 8, 8),
-                self._avg_pooling(fl2, 4, 4),
-                self._avg_pooling(fl3, 2, 2),
+                fl1_4,
+                fl2_4,
+                fl3_4,
                 fh4
             ], axis=-1 if self.data_format== 'channels_last' else 1
         )
