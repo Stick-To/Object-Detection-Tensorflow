@@ -608,9 +608,8 @@ class PFPNetR:
             self.sess.run(self.train_initializer)
 
     def _create_saver(self):
-        weights = tf.trainable_variables()
-        self.saver = tf.train.Saver(weights)
-        self.best_saver = tf.train.Saver(weights)
+        self.saver = tf.train.Saver()
+        self.best_saver = tf.train.Saver()
 
     def _create_summary(self):
         with tf.variable_scope('summaries'):

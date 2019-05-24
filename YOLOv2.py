@@ -285,9 +285,8 @@ class YOLOv2:
     def _create_detection_saver(self):
         weights = tf.trainable_variables(scope='feature_extractor')
         self.pretraining_weight_saver = tf.train.Saver(weights)
-        weights = weights + tf.trainable_variables('regressor')
-        self.saver = tf.train.Saver(weights)
-        self.best_saver = tf.train.Saver(weights)
+        self.saver = tf.train.Saver()
+        self.best_saver = tf.train.Saver()
 
     def _create_pretraining_summary(self):
         with tf.variable_scope('summaries'):

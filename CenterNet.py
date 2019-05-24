@@ -277,9 +277,8 @@ class CenterNet:
     def _create_saver(self):
         weights = tf.trainable_variables('backone')
         self.pretrained_saver = tf.train.Saver(weights)
-        weights = tf.trainable_variables()
-        self.saver = tf.train.Saver(weights)
-        self.best_saver = tf.train.Saver(weights)
+        self.saver = tf.train.Saver()
+        self.best_saver = tf.train.Saver()
 
     def _create_summary(self):
         with tf.variable_scope('summaries'):

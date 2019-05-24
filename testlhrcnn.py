@@ -64,7 +64,6 @@ trainset_provider = {
 }
 rcnn = net.LHRCNN(config, trainset_provider)
 # rcnn.load_pretraining_weight('./rcnnpretrain/test-30000')
-# rcnn.load_rpn_weight('./lhrcnn/test-44304')
 # rcnn.load_weight('./lhrcnn/test-44304')
 for i in range(epochs):
     print('-'*25, 'epoch', i, '-'*25)
