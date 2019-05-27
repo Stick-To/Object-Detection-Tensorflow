@@ -6,7 +6,7 @@ import tensorflow as tf
 
 def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=None,
                     crop_method=None, flip_prob=None, fill_mode='BILINEAR', keep_aspect_ratios=False,
-                    constant_values=0., color_jitter_prob=0.5, rotate=None ,ground_truth=None, pad_truth_to=None):
+                    constant_values=0., color_jitter_prob=None, rotate=None ,ground_truth=None, pad_truth_to=None):
 
     """
     :param image: HWC or CHW
