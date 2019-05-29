@@ -50,3 +50,9 @@ python3.7 tensorflow1.13
 
 # ImageNet pretraining
 see utils.tfrecord_imagenet_utils.py
+
+# different conv backone
+https://github.com/Stick-To/Deep_Conv_Backone
+
+# Instantiation of result 
+ corresponding repository in https://github.com/Stick-To
