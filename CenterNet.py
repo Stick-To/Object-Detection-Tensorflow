@@ -193,7 +193,7 @@ class CenterNet:
         ngbbox_w = ground_truth[..., 3] / stride
         class_id = tf.cast(ground_truth[..., 4], dtype=tf.int32)
         ngbbox_yx = ground_truth[..., 0:2] / stride
-        ngbbox_yx_round = tf.round(ngbbox_yx)
+        ngbbox_yx_round = tf.ceil(ngbbox_yx)
         offset_gt = ngbbox_yx - ngbbox_yx_round
         size_gt = ground_truth[..., 2:4] / stride
         ngbbox_yx_round_int = tf.cast(ngbbox_yx_round, tf.int64)
