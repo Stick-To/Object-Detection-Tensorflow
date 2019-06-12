@@ -139,8 +139,8 @@ class RetinaNet:
             p5 = self._get_pyramid(feat3, 256)
             p4, top_down = self._get_pyramid(feat2, 256, p5)
             p3, _ = self._get_pyramid(feat1, 256, top_down)
-            p6 = self._get_pyramid(p5, 256)
-            p7 = self._get_pyramid(p6, 256)
+            p6 = self._bn_activation_conv(p5, 256, 3, 2)
+            p7 = self._bn_activation_conv(p6, 256, 3, 2)
         with tf.variable_scope('regressor'):
             pred3c = self._classification_subnet(p3, 256)
             pred3r = self._regression_subnet(p3, 256)
