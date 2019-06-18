@@ -18,6 +18,8 @@ PFPNet
 
 CenterNet
 
+FCOS
+
 # TFRecord generation
 
 1) voc format dataset
