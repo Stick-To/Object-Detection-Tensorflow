@@ -1,7 +1,7 @@
 # Object-Detection-API-Tensorflow
 
-# features
-Every model is implemented in one file! It is easy for people to understand!
+# Features
+Every model is implemented in only one file!   It is easy for people to understand!
 
 # models
 
