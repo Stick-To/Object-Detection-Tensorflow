@@ -1,5 +1,8 @@
 # Object-Detection-API-Tensorflow
 
+# features
+Every model is implemented in one file! It is easy for people to understand!
+
 # models
 
 Yolo2
