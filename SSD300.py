@@ -140,12 +140,10 @@ class SSD300:
                 total_loss = total_loss / self.batch_size
                 optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=.9)
                 self.loss = total_loss + self.weight_decay * tf.add_n(
-                    [tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_extractor')]
-                ) + self.weight_decay * tf.add_n(
-                    [tf.nn.l2_loss(var) for var in tf.trainable_variables('regressor')]
-                )
-                train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+                    [tf.nn.l2_loss(var) for var in tf.trainable_variables()]
+                ) 
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+                train_op = optimizer.minimize(self.loss, global_step=self.global_step)
                 self.train_op = tf.group([update_ops, train_op])
             else:
                 pbbox_yxt = pbbox_yx[0, ...]
@@ -399,8 +397,8 @@ class SSD300:
         neg_agiou_mask = (1. - tf.cast(pos_agiou_mask, tf.float32)) > 0.
         rgindex = tf.argmax(other_agiou_rate, axis=1)
         pos_rgindex = tf.boolean_mask(rgindex, pos_agiou_mask)
-        pos_ppox_yx = tf.boolean_mask(other_pbbox_yx, pos_agiou_mask)
-        pos_ppox_hw = tf.boolean_mask(other_pbbox_hw, pos_agiou_mask)
+        pos_pbbox_yx = tf.boolean_mask(other_pbbox_yx, pos_agiou_mask)
+        pos_pbbox_hw = tf.boolean_mask(other_pbbox_hw, pos_agiou_mask)
         pos_pconf = tf.boolean_mask(other_pconf, pos_agiou_mask)
         pos_abbox_yx = tf.boolean_mask(other_abbox_yx, pos_agiou_mask)
         pos_abbox_hw = tf.boolean_mask(other_abbox_hw, pos_agiou_mask)
@@ -410,6 +408,9 @@ class SSD300:
         pos_shape = tf.shape(pos_pconf)
 
         neg_pconf = tf.boolean_mask(other_pconf, neg_agiou_mask)
+        neg_abbox_yx = tf.boolean_mask(other_abbox_yx, neg_agiou_mask)
+        neg_abbox_hw = tf.boolean_mask(other_abbox_hw, neg_agiou_mask)
+        neg_abbox_y1x1y2x2 = tf.concat([neg_abbox_yx - neg_abbox_hw/2., neg_abbox_yx + neg_abbox_hw/2.], axis=-1)
 
         neg_shape = tf.shape(neg_pconf)
         num_pos = gshape[0] + pos_shape[0]
@@ -419,11 +420,13 @@ class SSD300:
         neg_label = tf.tile(neg_class_id, [num_neg])
 
         total_neg_loss = tf.losses.sparse_softmax_cross_entropy(neg_label, neg_pconf, reduction=tf.losses.Reduction.NONE)
-        chosen_neg_loss, _ = tf.nn.top_k(total_neg_loss, chosen_num_neg)
-        neg_loss = tf.reduce_mean(chosen_neg_loss)
+        selected_indices = tf.image.non_max_suppression(
+            neg_abbox_y1x1y2x2, total_neg_loss, chosen_num_neg, iou_threshold=0.7
+        )
+        neg_loss = tf.reduce_mean(tf.gather(total_neg_loss, selected_indices))
 
-        total_pos_pbbox_yx = tf.concat([best_pbbox_yx, pos_ppox_yx], axis=0)
-        total_pos_pbbox_hw = tf.concat([best_pbbox_hw, pos_ppox_hw], axis=0)
+        total_pos_pbbox_yx = tf.concat([best_pbbox_yx, pos_pbbox_yx], axis=0)
+        total_pos_pbbox_hw = tf.concat([best_pbbox_hw, pos_pbbox_hw], axis=0)
         total_pos_pconf = tf.concat([best_pconf, pos_pconf], axis=0)
         total_pos_label = tf.concat([label, pos_label], axis=0)
         total_pos_gbbox_yx = tf.concat([gbbox_yx, pos_gbbox_yx], axis=0)

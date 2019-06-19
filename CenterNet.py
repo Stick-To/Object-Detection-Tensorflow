@@ -129,7 +129,7 @@ class CenterNet:
             stride = 4.0
 
         with tf.variable_scope('center_detector'):
-            keypoints = self._conv_bn_activation(features, self.num_classes, 3, 1, tf.nn.sigmoid)
+            keypoints = self._conv_bn_activation(features, self.num_classes, 3, 1, None)
             offset = self._conv_bn_activation(features, 2, 3, 1, None)
             size = self._conv_bn_activation(features, 2, 3, 1, None)
             if self.data_format == 'channels_first':
@@ -156,6 +156,7 @@ class CenterNet:
                 train_op = optimizer.minimize(self.loss, global_step=self.global_step)
                 self.train_op = tf.group([update_ops, train_op])
             else:
+                keypoints = tf.sigmoid(keypoints)
                 meshgrid_y = tf.expand_dims(meshgrid_y, axis=-1)
                 meshgrid_x = tf.expand_dims(meshgrid_x, axis=-1)
                 center = tf.concat([meshgrid_y, meshgrid_x], axis=-1)
@@ -244,8 +245,8 @@ class CenterNet:
             gt_keypoints.append(gt_keypoints_i)
         reduction = tf.concat(reduction, axis=-1)
         gt_keypoints = tf.concat(gt_keypoints, axis=-1)
-        keypoints_pos_loss = -tf.pow(1.-keypoints, 2.) * tf.log(keypoints+1e-12) * gt_keypoints
-        keypoints_neg_loss = -tf.pow(1.-reduction, 4) * tf.pow(keypoints, 2.) * tf.log(1.-keypoints+1e-12) * (1.-gt_keypoints)
+        keypoints_pos_loss = -tf.pow(1.-tf.sigmoid(keypoints), 2.) * tf.log_sigmoid(keypoints) * gt_keypoints
+        keypoints_neg_loss = -tf.pow(1.-reduction, 4) * tf.pow(tf.sigmoid(keypoints), 2.) * (-keypoints+tf.log_sigmoid(keypoints)) * (1.-gt_keypoints)
         keypoints_loss = tf.reduce_sum(keypoints_pos_loss) / tf.cast(num_g, tf.float32) + tf.reduce_sum(keypoints_neg_loss) / tf.cast(num_g, tf.float32)
         return keypoints_loss
 
