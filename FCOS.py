@@ -105,11 +105,6 @@ class FCOS:
             p3, _ = self._get_pyramid(c3, 256, top_down)
             p6 = self._bn_activation_conv(p5, 256, 3, 2)
             p7 = self._bn_activation_conv(p6, 256, 3, 2)
-            p3 = tf.nn.relu(p3)
-            p4 = tf.nn.relu(p4)
-            p5 = tf.nn.relu(p5)
-            p6 = tf.nn.relu(p6)
-            p7 = tf.nn.relu(p7)
         with tf.variable_scope('head'):
             p3conf, p3reg, p3center = self._detect_head(p3)
             p4conf, p4reg, p4center = self._detect_head(p4)
