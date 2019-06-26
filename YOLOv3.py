@@ -5,7 +5,7 @@ import tensorflow as tf
 import os
 import numpy as np
 import sys
-
+import datetime
 
 class YOLOv3:
     def __init__(self, config, data_provider):
@@ -191,45 +191,29 @@ class YOLOv3:
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             self.train_op = tf.group([update_ops, train_op])
         else:
-            pclasst = tf.concat([p1classt, p2classt, p3classt], axis=-2)
-            pconft = tf.concat([p1conft, p2conft, p3conft], axis=-1)
-            npbbox_y1x1y2x2t = tf.concat([np1bbox_y1x1y2x2t, np2bbox_y1x1y2x2t, np3bbox_y1x1y2x2t], axis=-2)
-            confidence = pclasst[0, ...] * tf.expand_dims(pconft[0, ...], axis=-1)
-            npbbox_y1x1y2x2t = npbbox_y1x1y2x2t[0, ...]
+            pclasst = tf.concat([p1classt[0, ...], p2classt[0, ...], p3classt[0, ...]], axis=0)
+            pconft = tf.concat([p1conft[0, ...], p2conft[0, ...], p3conft[0, ...]], axis=0)
+            npbbox_y1x1y2x2t = tf.concat([np1bbox_y1x1y2x2t[0, ...], np2bbox_y1x1y2x2t[0, ...], np3bbox_y1x1y2x2t[0, ...]], axis=0)
+            confidence = pclasst * tf.expand_dims(pconft, axis=-1)
 
-            class_id = tf.argmax(confidence, axis=-1)
-            scores = tf.reduce_max(confidence, axis=-1)
-            pred_mask = scores >= self.nms_score_threshold
-            scores = tf.boolean_mask(scores, pred_mask)
-            class_id = tf.boolean_mask(class_id, pred_mask)
-            npbbox = tf.boolean_mask(npbbox_y1x1y2x2t, pred_mask)
-            selected_index = tf.image.non_max_suppression(
-                npbbox, scores, iou_threshold=self.nms_score_threshold, max_output_size=self.nms_max_boxes
-            )
-            bbox = tf.gather(npbbox, selected_index)
-            class_id = tf.gather(class_id, selected_index)
-            scores = tf.gather(scores, selected_index)
+            filter_mask = tf.greater_equal(confidence, self.nms_score_threshold)
+            scores = []
+            class_id = []
+            bbox = []
+            for i in range(self.num_classes):
+                scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
+                bboxi = tf.boolean_mask(npbbox_y1x1y2x2t, filter_mask[:, i])
+                selected_indices = tf.image.non_max_suppression(
+
+                    bboxi, scoresi, self.nms_max_boxes, self.nms_iou_threshold,
+                )
+                scores.append(tf.gather(scoresi, selected_indices))
+                bbox.append(tf.gather(bboxi, selected_indices))
+                class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices), tf.int32) * i)
+            bbox = tf.concat(bbox, axis=0)
+            scores = tf.concat(scores, axis=0)
+            class_id = tf.concat(class_id, axis=0)
             self.detection_pred = [scores, bbox, class_id]
-
-            # per class nms
-            # filter_mask = tf.greater_equal(confidence, self.nms_score_threshold)
-            # scores = []
-            # class_id = []
-            # bbox = []
-            # for i in range(self.num_classes):
-            #     scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
-            #     bboxi = tf.boolean_mask(npbbox_y1x1y2x2t, filter_mask[:, i])
-            #     selected_indices = tf.image.non_max_suppression(
-            #
-            #         bboxi, scoresi, self.nms_max_boxes, self.nms_iou_threshold,
-            #     )
-            #     scores.append(tf.gather(scoresi, selected_indices))
-            #     bbox.append(tf.gather(bboxi, selected_indices))
-            #     class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices), tf.int32) * i)
-            # bbox = tf.concat(bbox, axis=0)
-            # scores = tf.concat(scores, axis=0)
-            # class_id = tf.concat(class_id, axis=0)
-            # self.detection_pred = [scores, bbox, class_id]
 
     def _init_session(self):
         self.sess = tf.InteractiveSession()
@@ -308,7 +292,7 @@ class YOLOv3:
         pbbox_hw = pred[..., self.num_classes*self.num_priors+self.num_priors*2:self.num_classes*self.num_priors+self.num_priors*4]
         pconf = pred[..., self.num_classes*self.num_priors+self.num_priors*4:]
 
-        pclasst = tf.nn.softmax(tf.reshape(pclass, [self.batch_size, -1, self.num_classes]))
+        pclasst = tf.nn.sigmoid(tf.reshape(pclass, [self.batch_size, -1, self.num_classes]))
         pbbox_yx = tf.nn.sigmoid(tf.reshape(pbbox_yx, [self.batch_size, pshape[1], pshape[2], self.num_priors, 2]))
         pbbox_hw = tf.reshape(pbbox_hw, [self.batch_size, pshape[1], pshape[2], self.num_priors, 2])
         pbbox_loss = tf.concat([pbbox_yx, pbbox_hw], axis=-1)
@@ -433,7 +417,7 @@ class YOLOv3:
             obj_loss = self.obj_scale * tf.reduce_sum(tf.square(rnpgiou_rate - rpconf))
         else:
             obj_loss = self.obj_scale * tf.reduce_sum(tf.square(1. - rpconf))
-        obj_loss = noobj_loss + obj_loss
+        obj_loss += noobj_loss
 
         coord_loss = self.coord_sacle * tf.reduce_sum(tf.square(gbbox_loss - rnpbbox_loss))
 
@@ -509,7 +493,10 @@ class YOLOv3:
 
     def _test_one_detection_image(self, images):
         self.is_training = False
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'))
+
         pred = self.sess.run(self.detection_pred, feed_dict={self.images: images})
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'))
         return pred
 
     def _save_pretraining_weight(self, mode, path):
