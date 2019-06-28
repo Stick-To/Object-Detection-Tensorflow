@@ -46,7 +46,7 @@ image_augmentor_config = {
     'keep_aspect_ratios': False,
     'constant_values': 0.,
     'color_jitter_prob': 0.5,
-    'rotate': [0.5, -10., 10.],
+    'rotate': [0.5, -5., -5.],
     'pad_truth_to': 60,
 }
 
