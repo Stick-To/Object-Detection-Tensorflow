@@ -225,7 +225,7 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
         x = (xmin + xmax) / 2.
         h = ymax - ymin
         w = xmax - xmin
-        ground_truth_ = tf.concat([ymin, xmin, ymax, xmax, class_id], axis=-1)
+        ground_truth_ = tf.concat([y, x, h, w, class_id], axis=-1)
 
         if tf.shape(ground_truth_)[0] == 0:
             if pad_truth_to is not None:
