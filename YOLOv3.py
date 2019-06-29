@@ -7,6 +7,7 @@ import numpy as np
 import sys
 import datetime
 
+
 class YOLOv3:
     def __init__(self, config, data_provider):
 
@@ -15,7 +16,6 @@ class YOLOv3:
         assert config['data_format'] in ['channels_first', 'channels_last']
         self.config = config
         self.data_provider = data_provider
-        self.is_pretraining = config['is_pretraining']
         self.data_shape = config['data_shape']
         self.num_classes = config['num_classes']
         self.weight_decay = config['weight_decay']
@@ -23,25 +23,23 @@ class YOLOv3:
         self.data_format = config['data_format']
         self.mode = config['mode']
         self.batch_size = config['batch_size'] if config['mode'] == 'train' else 1
+
         self.coord_sacle = config['coord_scale']
         self.noobj_scale = config['noobj_scale']
         self.obj_scale = config['obj_scale']
         self.class_scale = config['class_scale']
+        self.num_priors = config['num_priors']
+
         self.nms_score_threshold = config['nms_score_threshold']
         self.nms_max_boxes = config['nms_max_boxes']
         self.nms_iou_threshold = config['nms_iou_threshold']
-        self.rescore_confidence = config['rescore_confidence']
 
-        self.num_pyramid = 3  # darknet53 use 3 feature maps
-        assert len(config['priors']) >= self.num_pyramid
-        assert len(config['priors']) % self.num_pyramid == 0
-        priors = tf.convert_to_tensor(config['priors'], dtype=tf.float32)
-        priors = tf.reshape(priors, [1, 1, 1, -1, 2])
-        self.num_priors = len(config['priors']) // self.num_pyramid
-        self.final_units = (self.num_classes + 5) * self.num_priors
+        priors = config['priors']
+        self.stride = [8., 16., 32.]
         self.priors = []
-        for i in range(self.num_pyramid-1, -1, -1):
-            self.priors.append(priors[..., self.num_priors*i:self.num_priors*(i+1), :])
+        for i in range(len(priors)):
+            self.priors.append(tf.reshape(tf.constant(priors[i], dtype=tf.float32)/self.stride[i], [1, 1, -1, 2]))
+        self.final_units = (self.num_classes + 5) * self.num_priors
 
         if self.mode == 'train':
             self.num_train = data_provider['num_train']
@@ -54,47 +52,15 @@ class YOLOv3:
 
         self.global_step = tf.get_variable(name='global_step', initializer=tf.constant(0), trainable=False)
         self.is_training = True
-        
-        if self.is_pretraining:
-            self._define_pretraining_inputs()
-            self._build_pretraining_graph()
-            self._create_pretraining_saver()
-            self.save_weight = self._save_pretraining_weight
-            self.train_one_epoch = self._train_pretraining_epoch
-            self.test_one_image = self._test_one_pretraining_batch
-            if self.mode == 'train':
-                self._create_pretraining_summary()
-        else:
-            self._define_detection_inputs()
-            self._build_detection_graph()
-            self._create_detection_saver()
-            self.save_weight = self._save_detection_weight
-            self.train_one_epoch = self._train_detection_epoch
-            self.test_one_image = self._test_one_detection_image
-            if self.mode == 'train':
-                self._create_detection_summary()
+
+        self._define_inputs()
+        self._build_graph()
+        self._create_saver()
+        if self.mode == 'train':
+            self._create_summary()
         self._init_session()
 
-    def _define_pretraining_inputs(self):
-        shape = [self.batch_size]
-        shape.extend(self.data_shape)
-        mean = tf.convert_to_tensor([123.68, 116.779, 103.979], dtype=tf.float32)
-        if self.data_format == 'channels_last':
-            mean = tf.reshape(mean, [1, 1, 1, 3])
-        else:
-            mean = tf.reshape(mean, [1, 3, 1, 1])
-        if self.mode == 'train':
-            self.images, self.labels = self.train_iterator.get_next()
-            self.images.set_shape(shape)
-            self.images = self.images - mean
-            self.labels = tf.cast(self.labels, tf.int64)
-        else:
-            self.images = tf.placeholder(tf.float32, shape, name='images')
-            self.images = self.images - mean
-            self.labels = tf.placeholder(tf.int64, [self.batch_size, 1], name='labels')
-        self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
-
-    def _define_detection_inputs(self):
+    def _define_inputs(self):
         shape = [self.batch_size]
         shape.extend(self.data_shape)
         mean = tf.convert_to_tensor([123.68, 116.779, 103.979], dtype=tf.float32)
@@ -112,32 +78,10 @@ class YOLOv3:
             self.ground_truth = tf.placeholder(tf.float32, [self.batch_size, None, 5], name='labels')
         self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
 
-    def _build_pretraining_graph(self):
-        with tf.variable_scope('feature_extractor'):
-            pyd1, _, _, _, _, _ = self._feature_extractor(self.images)
-        with tf.variable_scope('pretraining'):
-            conv = self._conv_layer(pyd1, self.num_classes, 1, 1)
-            axes = [1, 2] if self.data_format == 'channels_last' else [2, 3]
-            global_pool = tf.reduce_mean(conv, axis=axes, name='global_pool')
-            loss = tf.losses.sparse_softmax_cross_entropy(tf.squeeze(self.labels), global_pool, reduction=tf.losses.Reduction.MEAN)
-            self.pred = tf.argmax(global_pool, 1)
-            self.accuracy = tf.reduce_mean(
-                tf.cast(tf.equal(self.pred, tf.squeeze(self.labels)), tf.float32), name='accuracy'
-            )
-            self.loss = loss + self.weight_decay * tf.add_n(
-                [tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_extractor')]
-            ) + self.weight_decay * tf.add_n(
-                [tf.nn.l2_loss(var) for var in tf.trainable_variables('pretraining')]
-            )
-            optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
-            train_op = optimizer.minimize(self.loss, global_step=self.global_step)
-            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-            self.train_op = tf.group([update_ops, train_op])
-
-    def _build_detection_graph(self):
-        with tf.variable_scope('feature_extractor'):
-            pyd1, pyd2, pyd3, down_rate1, down_rate2, down_rate3 = self._feature_extractor(self.images)
-        with tf.variable_scope('regressor'):
+    def _build_graph(self):
+        with tf.variable_scope('backone'):
+            pyd1, pyd2, pyd3= self._feature_extractor(self.images)
+        with tf.variable_scope('head'):
             pred1, top_down = self._yolo3_header(pyd1, 1024, 'pyd1', )
             pred2, top_down = self._yolo3_header(pyd2, 256, 'pyd2', top_down)
             pred3, _ = self._yolo3_header(pyd3, 128, 'pyd3', top_down)
@@ -148,39 +92,216 @@ class YOLOv3:
             p1shape = tf.shape(pred1)
             p2shape = tf.shape(pred2)
             p3shape = tf.shape(pred3)
-        with tf.variable_scope('inference'):
-            topleft1, p1classt, p1bbox_loss, p1conft, np1bbox_y1x1, np1bbox_y2x2, np1bbox_y1x1y2x2t, np1bbox_hw = self._get_normlized_pred(pred1, p1shape, self.priors[0], down_rate1)
-            topleft2, p2classt, p2bbox_loss, p2conft, np2bbox_y1x1, np2bbox_y2x2, np2bbox_y1x1y2x2t, np2bbox_hw = self._get_normlized_pred(pred2, p2shape, self.priors[1], down_rate2)
-            topleft3, p3classt, p3bbox_loss, p3conft, np3bbox_y1x1, np3bbox_y2x2, np3bbox_y1x1y2x2t, np3bbox_hw = self._get_normlized_pred(pred3, p3shape, self.priors[2], down_rate3)
+            pred1 = tf.reshape(pred1, [p1shape[0], p1shape[1], p1shape[2], self.num_priors, -1])
+            pred2 = tf.reshape(pred2, [p2shape[0], p2shape[1], p2shape[2], self.num_priors, -1])
+            pred3 = tf.reshape(pred3, [p3shape[0], p3shape[1], p3shape[2], self.num_priors, -1])
+
+            p1class = pred1[..., :self.num_classes]
+            p1bbox_yx = pred1[..., self.num_classes:self.num_classes+2]
+            p1bbox_hw = pred1[..., self.num_classes+2:self.num_classes+4]
+            p1obj = pred1[..., self.num_classes+4:]
+            p2class = pred2[..., :self.num_classes]
+            p2bbox_yx = pred2[..., self.num_classes:self.num_classes + 2]
+            p2bbox_hw = pred2[..., self.num_classes + 2:self.num_classes + 4]
+            p2obj = pred2[..., self.num_classes + 4:]
+            p3class = pred3[..., :self.num_classes]
+            p3bbox_yx = pred3[..., self.num_classes:self.num_classes + 2]
+            p3bbox_hw = pred3[..., self.num_classes + 2:self.num_classes + 4]
+            p3obj = pred3[..., self.num_classes + 4:]
+            a1bbox_yx, a1bbox_hw, a1bbox_y1x1, a1bbox_y2x2 = self._get_priors(p1shape, self.priors[0])
+            a2bbox_yx, a2bbox_hw, a2bbox_y1x1, a2bbox_y2x2 = self._get_priors(p2shape, self.priors[1])
+            a3bbox_yx, a3bbox_hw, a3bbox_y1x1, a3bbox_y2x2 = self._get_priors(p3shape, self.priors[2])
+
         if self.mode == 'train':
             total_loss = []
-            a1bbox_hw, a1bbox_y1x1, a1bbox_y2x2 = self._get_normlized_priors(topleft1, p1shape, self.priors[0])
-            a2bbox_hw, a2bbox_y1x1, a2bbox_y2x2 = self._get_normlized_priors(topleft2, p2shape, self.priors[1])
-            a3bbox_hw, a3bbox_y1x1, a3bbox_y2x2 = self._get_normlized_priors(topleft3, p3shape, self.priors[2])
-            ground_truth1 = self._get_normlized_ground_truth(down_rate1)
-            ground_truth2 = self._get_normlized_ground_truth(down_rate2)
-            ground_truth3 = self._get_normlized_ground_truth(down_rate3)
-
             for i in range(self.batch_size):
-                rpriors_index1, ragiou_rate1 = self._get_responsible_priors(ground_truth1[i, ...], a1bbox_hw, a1bbox_y1x1, a1bbox_y2x2)
-                rpriors_index2, ragiou_rate2 = self._get_responsible_priors(ground_truth2[i, ...], a2bbox_hw, a2bbox_y1x1, a2bbox_y2x2)
-                rpriors_index3, ragiou_rate3 = self._get_responsible_priors(ground_truth3[i, ...], a3bbox_hw, a3bbox_y1x1, a3bbox_y2x2)
-                rmask1 = tf.cast(ragiou_rate1 > ragiou_rate2, tf.float32) * tf.cast(ragiou_rate1 > ragiou_rate3, tf.float32)
-                rmask2 = tf.cast(ragiou_rate2 > ragiou_rate3, tf.float32) * tf.cast(ragiou_rate2 > ragiou_rate1, tf.float32)
-                rmask3 = (tf.ones_like(rmask1) - rmask1) * (tf.ones_like(rmask2) - rmask2)
-                rmask1 = rmask1 > 0.
-                rmask2 = rmask2 > 0.
-                rmask3 = rmask3 > 0.
-                loss1 = self._compute_one_image_loss(p1classt[i, ...], p1bbox_loss[i, ...], np1bbox_hw[i, ...], np1bbox_y1x1[i, ...],
-                                                     np1bbox_y2x2[i, ...], p1conft[i, ...], a1bbox_hw, rpriors_index1, rmask1,
-                                                     ground_truth1[i, ...])
-                loss2 = self._compute_one_image_loss(p2classt[i, ...], p2bbox_loss[i, ...], np2bbox_hw[i, ...], np2bbox_y1x1[i, ...],
-                                                     np2bbox_y2x2[i, ...], p2conft[i, ...], a2bbox_hw, rpriors_index2, rmask2,
-                                                     ground_truth2[i, ...])
-                loss3 = self._compute_one_image_loss(p3classt[i, ...], p3bbox_loss[i, ...], np3bbox_hw[i, ...], np3bbox_y1x1[i, ...],
-                                                     np3bbox_y2x2[i, ...], p3conft[i, ...], a3bbox_hw, rpriors_index3, rmask3,
-                                                     ground_truth3[i, ...])
-                loss = loss1 + loss2 + loss3
+                gn1_yxi, gn1_hwi, gn1_labeli = self._get_normlized_gn(self.stride[-1], i)
+                gn2_yxi, gn2_hwi, gn2_labeli = self._get_normlized_gn(self.stride[-2], i)
+                gn3_yxi, gn3_hwi, gn3_labeli = self._get_normlized_gn(self.stride[-3], i)
+                num_g = tf.shape(gn2_labeli)[0]
+                num_gf = tf.cast(num_g, tf.float32)
+                gn1_floor_ = tf.cast(tf.floor(gn1_yxi), tf.int64)
+                gn2_floor_ = tf.cast(tf.floor(gn2_yxi), tf.int64)
+                gn3_floor_ = tf.cast(tf.floor(gn3_yxi), tf.int64)
+                nogn1_mask = tf.sparse.SparseTensor(gn1_floor_, tf.ones_like(gn1_floor_[..., 0]), dense_shape=[p1shape[1], p1shape[2]])
+                nogn1_mask = (1 - tf.sparse.to_dense(nogn1_mask, validate_indices=False)) > 0
+                nogn2_mask = tf.sparse.SparseTensor(gn2_floor_, tf.ones_like(gn2_floor_[..., 0]), dense_shape=[p2shape[1], p2shape[2]])
+                nogn2_mask = (1 - tf.sparse.to_dense(nogn2_mask, validate_indices=False)) > 0
+                nogn3_mask = tf.sparse.SparseTensor(gn3_floor_, tf.ones_like(gn3_floor_[..., 0]), dense_shape=[p3shape[1], p3shape[2]])
+                nogn3_mask = (1 - tf.sparse.to_dense(nogn3_mask, validate_indices=False)) > 0
+                rp1bbox_yx = tf.gather_nd(p1bbox_yx[i, ...], gn1_floor_)
+                rp2bbox_yx = tf.gather_nd(p2bbox_yx[i, ...], gn2_floor_)
+                rp3bbox_yx = tf.gather_nd(p3bbox_yx[i, ...], gn3_floor_)
+                rp1bbox_hw = tf.gather_nd(p1bbox_hw[i, ...], gn1_floor_)
+                rp2bbox_hw = tf.gather_nd(p2bbox_hw[i, ...], gn2_floor_)
+                rp3bbox_hw = tf.gather_nd(p3bbox_hw[i, ...], gn3_floor_)
+                ra1bbox_hw = tf.gather_nd(a1bbox_hw, gn1_floor_)
+                ra2bbox_hw = tf.gather_nd(a2bbox_hw, gn2_floor_)
+                ra3bbox_hw = tf.gather_nd(a3bbox_hw, gn3_floor_)
+                rp1class = tf.gather_nd(p1class[i, ...], gn1_floor_)
+                rp2class = tf.gather_nd(p2class[i, ...], gn2_floor_)
+                rp3class = tf.gather_nd(p3class[i, ...], gn3_floor_)
+                rp1obj = tf.gather_nd(p1obj[i, ...], gn1_floor_)
+                rp2obj = tf.gather_nd(p2obj[i, ...], gn2_floor_)
+                rp3obj = tf.gather_nd(p3obj[i, ...], gn3_floor_)
+                ra1bbox_y1x1 = tf.gather_nd(a1bbox_y1x1, gn1_floor_)
+                ra2bbox_y1x1 = tf.gather_nd(a2bbox_y1x1, gn2_floor_)
+                ra3bbox_y1x1 = tf.gather_nd(a3bbox_y1x1, gn3_floor_)
+                ra1bbox_y2x2 = tf.gather_nd(a1bbox_y2x2, gn1_floor_)
+                ra2bbox_y2x2 = tf.gather_nd(a2bbox_y2x2, gn2_floor_)
+                ra3bbox_y2x2 = tf.gather_nd(a3bbox_y2x2, gn3_floor_)
+                gn1_y1x1i = tf.expand_dims(gn1_yxi - gn1_hwi / 2., axis=1)
+                gn1_y2x2i = tf.expand_dims(gn1_yxi + gn1_hwi / 2., axis=1)
+                gn2_y1x1i = tf.expand_dims(gn2_yxi - gn2_hwi / 2., axis=1)
+                gn2_y2x2i = tf.expand_dims(gn2_yxi + gn2_hwi / 2., axis=1)
+                gn3_y1x1i = tf.expand_dims(gn3_yxi - gn3_hwi / 2., axis=1)
+                gn3_y2x2i = tf.expand_dims(gn3_yxi + gn3_hwi / 2., axis=1)
+                rga1iou_y1x1 = tf.maximum(gn1_y1x1i, ra1bbox_y1x1)
+                rga2iou_y1x1 = tf.maximum(gn2_y1x1i, ra2bbox_y1x1)
+                rga3iou_y1x1 = tf.maximum(gn3_y1x1i, ra3bbox_y1x1)
+                rga1iou_y2x2 = tf.minimum(gn1_y2x2i, ra1bbox_y2x2)
+                rga2iou_y2x2 = tf.minimum(gn2_y2x2i, ra2bbox_y2x2)
+                rga3iou_y2x2 = tf.minimum(gn3_y2x2i, ra3bbox_y2x2)
+                rga1iou_area = tf.reduce_prod(rga1iou_y2x2 - rga1iou_y1x1, axis=-1)
+                rga2iou_area = tf.reduce_prod(rga2iou_y2x2 - rga2iou_y1x1, axis=-1)
+                rga3iou_area = tf.reduce_prod(rga3iou_y2x2 - rga3iou_y1x1, axis=-1)
+
+                g1area = tf.reduce_prod(gn1_y2x2i - gn1_y1x1i, axis=-1)
+                g2area = tf.reduce_prod(gn2_y2x2i - gn2_y1x1i, axis=-1)
+                g3area = tf.reduce_prod(gn3_y2x2i - gn3_y1x1i, axis=-1)
+                a1area = tf.reduce_prod(ra1bbox_hw, axis=-1)
+                a2area = tf.reduce_prod(ra2bbox_hw, axis=-1)
+                a3area = tf.reduce_prod(ra3bbox_hw, axis=-1)
+                rga1iou = rga1iou_area / (a1area + g1area - rga1iou_area)
+                rga2iou = rga2iou_area / (a2area + g2area - rga2iou_area)
+                rga3iou = rga3iou_area / (a3area + g3area - rga3iou_area)
+
+                rga1index = tf.expand_dims(tf.cast(tf.argmax(rga1iou, axis=-1), tf.int32), -1)
+                rga2index = tf.expand_dims(tf.cast(tf.argmax(rga2iou, axis=-1), tf.int32), -1)
+                rga3index = tf.expand_dims(tf.cast(tf.argmax(rga3iou, axis=-1), tf.int32), -1)
+                rga1iou_max = tf.reduce_max(rga1iou, axis=-1)
+                rga2iou_max = tf.reduce_max(rga2iou, axis=-1)
+                rga3iou_max = tf.reduce_max(rga3iou, axis=-1)
+                rga1mask = tf.cast(rga1iou_max > rga2iou_max, tf.float32) * tf.cast(rga1iou_max > rga3iou_max, tf.float32)
+                rga2mask = tf.cast(rga2iou_max > rga1iou_max, tf.float32) * tf.cast(rga2iou_max > rga3iou_max, tf.float32)
+                rga3mask = (1. - tf.cast(rga1mask + rga2mask, tf.float32)) > 0.
+                rga2mask = rga2mask > 0.
+                rga1mask = rga1mask > 0.
+                rga1index = tf.boolean_mask(rga1index, rga1mask)
+                rga2index = tf.boolean_mask(rga2index, rga2mask)
+                rga3index = tf.boolean_mask(rga3index, rga3mask)
+                rga1index = tf.concat([tf.expand_dims(tf.range(tf.shape(rga1index)[0]), -1), rga1index], axis=-1)
+                rga2index = tf.concat([tf.expand_dims(tf.range(tf.shape(rga2index)[0]), -1), rga2index], axis=-1)
+                rga3index = tf.concat([tf.expand_dims(tf.range(tf.shape(rga3index)[0]), -1), rga3index], axis=-1)
+
+                rp1bbox_yx = tf.reshape(tf.gather_nd(tf.boolean_mask(rp1bbox_yx, rga1mask), rga1index), [-1, 2])
+                rp2bbox_yx = tf.reshape(tf.gather_nd(tf.boolean_mask(rp2bbox_yx, rga2mask), rga2index), [-1, 2])
+                rp3bbox_yx = tf.reshape(tf.gather_nd(tf.boolean_mask(rp3bbox_yx, rga3mask), rga3index), [-1, 2])
+                rp1bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(rp1bbox_hw, rga1mask), rga1index), [-1, 2])
+                rp2bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(rp2bbox_hw, rga2mask), rga2index), [-1, 2])
+                rp3bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(rp3bbox_hw, rga3mask), rga3index), [-1, 2])
+                rp1class = tf.reshape(tf.gather_nd(tf.boolean_mask(rp1class, rga1mask), rga1index), [-1, self.num_classes])
+                rp2class = tf.reshape(tf.gather_nd(tf.boolean_mask(rp2class, rga2mask), rga2index), [-1, self.num_classes])
+                rp3class = tf.reshape(tf.gather_nd(tf.boolean_mask(rp3class, rga3mask), rga3index), [-1, self.num_classes])
+                rp1obj = tf.reshape(tf.gather_nd(tf.boolean_mask(rp1obj, rga1mask), rga1index), [-1, 1])
+                rp2obj = tf.reshape(tf.gather_nd(tf.boolean_mask(rp2obj, rga2mask), rga2index), [-1, 1])
+                rp3obj = tf.reshape(tf.gather_nd(tf.boolean_mask(rp3obj, rga3mask), rga3index), [-1, 1])
+                ra1bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(ra1bbox_hw, rga1mask), rga1index), [-1, 2])
+                ra2bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(ra2bbox_hw, rga2mask), rga2index), [-1, 2])
+                ra3bbox_hw = tf.reshape(tf.gather_nd(tf.boolean_mask(ra3bbox_hw, rga3mask), rga3index), [-1, 2])
+                gn1_yxi = tf.boolean_mask(gn1_yxi, rga1mask)
+                gn1_hwi = tf.boolean_mask(gn1_hwi, rga1mask)
+                gn2_yxi = tf.boolean_mask(gn2_yxi, rga2mask)
+                gn2_hwi = tf.boolean_mask(gn2_hwi, rga2mask)
+                gn3_yxi = tf.boolean_mask(gn3_yxi, rga3mask)
+                gn3_hwi = tf.boolean_mask(gn3_hwi, rga3mask)
+                gn1_labeli = tf.one_hot(tf.boolean_mask(gn1_labeli, rga1mask), self.num_classes)
+                gn2_labeli = tf.one_hot(tf.boolean_mask(gn2_labeli, rga2mask), self.num_classes)
+                gn3_labeli = tf.one_hot(tf.boolean_mask(gn3_labeli, rga3mask), self.num_classes)
+                rp1bbox_yx_target = gn1_yxi - tf.floor(gn1_yxi)
+                rp2bbox_yx_target = gn2_yxi - tf.floor(gn2_yxi)
+                rp3bbox_yx_target = gn3_yxi - tf.floor(gn3_yxi)
+                rp1bbox_hw_target = tf.log(gn1_hwi/ra1bbox_hw)
+                rp2bbox_hw_target = tf.log(gn2_hwi/ra2bbox_hw)
+                rp3bbox_hw_target = tf.log(gn3_hwi/ra3bbox_hw)
+                yx_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=rp1bbox_yx_target, logits=rp1bbox_yx))
+                yx_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=rp2bbox_yx_target, logits=rp2bbox_yx))
+                yx_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=rp3bbox_yx_target, logits=rp3bbox_yx))
+                hw_loss1 = 0.5 * tf.reduce_sum(tf.square(rp1bbox_hw - rp1bbox_hw_target))
+                hw_loss2 = 0.5 * tf.reduce_sum(tf.square(rp2bbox_hw - rp2bbox_hw_target))
+                hw_loss3 = 0.5 * tf.reduce_sum(tf.square(rp3bbox_hw - rp3bbox_hw_target))
+                coord_loss = (yx_loss1 + yx_loss2 + yx_loss3 + hw_loss1 + hw_loss2 + hw_loss3)
+                class_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=gn1_labeli, logits=rp1class))
+                class_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=gn2_labeli, logits=rp2class))
+                class_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=gn3_labeli, logits=rp3class))
+                class_loss = (class_loss1 + class_loss2 + class_loss3)
+                obj_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(rp1obj), logits=rp1obj))
+                obj_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(rp2obj), logits=rp2obj))
+                obj_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(rp3obj), logits=rp3obj))
+                obj_loss = (obj_loss1 + obj_loss2 + obj_loss3)
+                nogn1_mask = tf.reshape(nogn1_mask, [-1])
+                nogn2_mask = tf.reshape(nogn2_mask, [-1])
+                nogn3_mask = tf.reshape(nogn3_mask, [-1])
+
+                a1bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a1bbox_y1x1, [-1, self.num_priors, 2]), nogn1_mask), 1)
+                a2bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a2bbox_y1x1, [-1, self.num_priors, 2]), nogn2_mask), 1)
+                a3bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a3bbox_y1x1, [-1, self.num_priors, 2]), nogn3_mask), 1)
+                a1bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a1bbox_y2x2, [-1, self.num_priors, 2]), nogn1_mask), 1)
+                a2bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a2bbox_y2x2, [-1, self.num_priors, 2]), nogn2_mask), 1)
+                a3bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a3bbox_y2x2, [-1, self.num_priors, 2]), nogn3_mask), 1)
+                p1obj_nobest = tf.boolean_mask(tf.reshape(p1obj[i, ...], [-1, self.num_priors]), nogn1_mask)
+                p2obj_nobest = tf.boolean_mask(tf.reshape(p2obj[i, ...], [-1, self.num_priors]), nogn2_mask)
+                p3obj_nobest = tf.boolean_mask(tf.reshape(p3obj[i, ...], [-1, self.num_priors]), nogn3_mask)
+                num_g1 = tf.shape(gn1_y1x1i)[0]
+                num_g2 = tf.shape(gn2_y1x1i)[0]
+                num_g3 = tf.shape(gn3_y1x1i)[0]
+                num_a1 = tf.shape(a1bbox_y1x1_nobest)[0]
+                num_a2 = tf.shape(a2bbox_y1x1_nobest)[0]
+                num_a3 = tf.shape(a3bbox_y1x1_nobest)[0]
+                gn1_y1x1i = tf.tile(tf.expand_dims(gn1_y1x1i, 0), [num_a1, 1, 1, 1])
+                gn1_y2x2i = tf.tile(tf.expand_dims(gn1_y2x2i, 0), [num_a1, 1, 1, 1])
+                gn2_y1x1i = tf.tile(tf.expand_dims(gn2_y1x1i, 0), [num_a2, 1, 1, 1])
+                gn2_y2x2i = tf.tile(tf.expand_dims(gn2_y2x2i, 0), [num_a2, 1, 1, 1])
+                gn3_y1x1i = tf.tile(tf.expand_dims(gn3_y1x1i, 0), [num_a3, 1, 1, 1])
+                gn3_y2x2i = tf.tile(tf.expand_dims(gn3_y2x2i, 0), [num_a3, 1, 1, 1])
+                a1bbox_y1x1_nobest = tf.tile(a1bbox_y1x1_nobest, [1, num_g1, 1, 1])
+                a2bbox_y1x1_nobest = tf.tile(a2bbox_y1x1_nobest, [1, num_g2, 1, 1])
+                a3bbox_y1x1_nobest = tf.tile(a3bbox_y1x1_nobest, [1, num_g3, 1, 1])
+                a1bbox_y2x2_nobest = tf.tile(a1bbox_y2x2_nobest, [1, num_g1, 1, 1])
+                a2bbox_y2x2_nobest = tf.tile(a2bbox_y2x2_nobest, [1, num_g2, 1, 1])
+                a3bbox_y2x2_nobest = tf.tile(a3bbox_y2x2_nobest, [1, num_g3, 1, 1])
+                ag1iou_y1x1 = tf.maximum(gn1_y1x1i, a1bbox_y1x1_nobest)
+                ag1iou_y2x2 = tf.minimum(gn1_y2x2i, a1bbox_y2x2_nobest)
+                ag2iou_y1x1 = tf.maximum(gn2_y1x1i, a2bbox_y1x1_nobest)
+                ag2iou_y2x2 = tf.minimum(gn2_y2x2i, a2bbox_y2x2_nobest)
+                ag3iou_y1x1 = tf.maximum(gn3_y1x1i, a3bbox_y1x1_nobest)
+                ag3iou_y2x2 = tf.minimum(gn3_y2x2i, a3bbox_y2x2_nobest)
+                ag1iou_area = tf.reduce_prod(ag1iou_y2x2 - ag1iou_y1x1, axis=-1)
+                ag2iou_area = tf.reduce_prod(ag2iou_y2x2 - ag2iou_y1x1, axis=-1)
+                ag3iou_area = tf.reduce_prod(ag3iou_y2x2 - ag3iou_y1x1, axis=-1)
+                a1area = tf.reduce_prod(a1bbox_y2x2_nobest-a1bbox_y1x1_nobest, axis=-1)
+                g1area = tf.reduce_prod(gn1_y2x2i - gn1_y1x1i, axis=-1)
+                a2area = tf.reduce_prod(a2bbox_y2x2_nobest - a2bbox_y1x1_nobest, axis=-1)
+                g2area = tf.reduce_prod(gn2_y2x2i - gn2_y1x1i, axis=-1)
+                a3area = tf.reduce_prod(a3bbox_y2x2_nobest - a3bbox_y1x1_nobest, axis=-1)
+                g3area = tf.reduce_prod(gn3_y2x2i - gn3_y1x1i, axis=-1)
+                ag1iou = ag1iou_area / (a1area + g1area - ag1iou_area)
+                ag2iou = ag2iou_area / (a2area + g2area - ag2iou_area)
+                ag3iou = ag3iou_area / (a3area + g3area - ag3iou_area)
+                ag1iou = tf.reduce_max(ag1iou, axis=1)
+                ag2iou = tf.reduce_max(ag2iou, axis=1)
+                ag3iou = tf.reduce_max(ag3iou, axis=1)
+                ag1iou_noobj_mask = tf.cast(ag1iou < 0.5, tf.float32)
+                ag2iou_noobj_mask = tf.cast(ag2iou < 0.5, tf.float32)
+                ag3iou_noobj_mask = tf.cast(ag3iou < 0.5, tf.float32)
+                noonj_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag1iou_noobj_mask, logits=p1obj_nobest) * ag1iou_noobj_mask)
+                noonj_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag2iou_noobj_mask, logits=p2obj_nobest) * ag2iou_noobj_mask)
+                noonj_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag3iou_noobj_mask, logits=p3obj_nobest) * ag3iou_noobj_mask)
+                noonj_loss = noonj_loss1 + noonj_loss2 + noonj_loss3
+                # obj_loss1 = tf.reduce_sum((ag1iou - p1obj_nobest) * (1. - ag1iou_noobj_mask))
+                # obj_loss2 = tf.reduce_sum((ag2iou - p2obj_nobest) * (1. - ag2iou_noobj_mask))
+                # obj_loss3 = tf.reduce_sum((ag3iou - p3obj_nobest) * (1. - ag3iou_noobj_mask))
+                loss = self.coord_sacle*coord_loss+self.class_scale*class_loss+self.obj_scale*obj_loss+self.noobj_scale*noonj_loss
                 total_loss.append(loss)
             total_loss = tf.reduce_mean(total_loss)
             optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
@@ -191,18 +312,44 @@ class YOLOv3:
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             self.train_op = tf.group([update_ops, train_op])
         else:
-            pclasst = tf.concat([p1classt[0, ...], p2classt[0, ...], p3classt[0, ...]], axis=0)
-            pconft = tf.concat([p1conft[0, ...], p2conft[0, ...], p3conft[0, ...]], axis=0)
-            npbbox_y1x1y2x2t = tf.concat([np1bbox_y1x1y2x2t[0, ...], np2bbox_y1x1y2x2t[0, ...], np3bbox_y1x1y2x2t[0, ...]], axis=0)
-            confidence = pclasst * tf.expand_dims(pconft, axis=-1)
-
+            p1class = tf.reshape(p1class[0, ...], [-1, self.num_classes])
+            p2class = tf.reshape(p2class[0, ...], [-1, self.num_classes])
+            p3class = tf.reshape(p3class[0, ...], [-1, self.num_classes])
+            p1obj = tf.reshape(p1obj[0, ...], [-1, 1])
+            p2obj = tf.reshape(p2obj[0, ...], [-1, 1])
+            p3obj = tf.reshape(p3obj[0, ...], [-1, 1])
+            p1bbox_yx = tf.reshape(p1bbox_yx[0, ...], [-1, 2])
+            p2bbox_yx = tf.reshape(p2bbox_yx[0, ...], [-1, 2])
+            p3bbox_yx = tf.reshape(p3bbox_yx[0, ...], [-1, 2])
+            p1bbox_hw = tf.reshape(p1bbox_hw[0, ...], [-1, 2])
+            p2bbox_hw = tf.reshape(p2bbox_hw[0, ...], [-1, 2])
+            p3bbox_hw = tf.reshape(p3bbox_hw[0, ...], [-1, 2])
+            a1bbox_yx = tf.reshape(a1bbox_yx, [-1, 2])
+            a2bbox_yx = tf.reshape(a2bbox_yx, [-1, 2])
+            a3bbox_yx = tf.reshape(a3bbox_yx, [-1, 2])
+            a1bbox_hw = tf.reshape(a1bbox_hw, [-1, 2])
+            a2bbox_hw = tf.reshape(a2bbox_hw, [-1, 2])
+            a3bbox_hw = tf.reshape(a3bbox_hw, [-1, 2])
+            pclasst = tf.sigmoid(tf.concat([p1class, p2class, p3class], axis=0))
+            pobjt = tf.sigmoid(tf.concat([p1obj, p2obj, p3obj], axis=0))
+            bbox_yx1 = a1bbox_yx + tf.sigmoid(p1bbox_yx)
+            bbox_hw1 = a1bbox_hw + tf.exp(p1bbox_hw)
+            bbox_yx2 = a2bbox_yx + tf.sigmoid(p2bbox_yx)
+            bbox_hw2 = a2bbox_hw + tf.exp(p2bbox_hw)
+            bbox_yx3 = a3bbox_yx + tf.sigmoid(p3bbox_yx)
+            bbox_hw3 = a3bbox_hw + tf.exp(p3bbox_hw)
+            bbox1_y1x1y2x2 = tf.concat([bbox_yx1 - bbox_hw1 / 2., bbox_yx1 + bbox_hw1 / 2.], axis=-1) * self.stride[-1]
+            bbox2_y1x1y2x2 = tf.concat([bbox_yx2 - bbox_hw2 / 2., bbox_yx2 + bbox_hw2 / 2.], axis=-1) * self.stride[-1]
+            bbox3_y1x1y2x2 = tf.concat([bbox_yx3 - bbox_hw3 / 2., bbox_yx3 + bbox_hw3 / 2.], axis=-1) * self.stride[-2]
+            bbox_y1x1y2x2 = tf.concat([bbox1_y1x1y2x2, bbox2_y1x1y2x2, bbox3_y1x1y2x2], axis=0)
+            confidence = pclasst * pobjt
             filter_mask = tf.greater_equal(confidence, self.nms_score_threshold)
             scores = []
             class_id = []
             bbox = []
             for i in range(self.num_classes):
                 scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
-                bboxi = tf.boolean_mask(npbbox_y1x1y2x2t, filter_mask[:, i])
+                bboxi = tf.boolean_mask(bbox_y1x1y2x2, filter_mask[:, i])
                 selected_indices = tf.image.non_max_suppression(
 
                     bboxi, scoresi, self.nms_max_boxes, self.nms_iou_threshold,
@@ -221,24 +368,13 @@ class YOLOv3:
         if self.mode == 'train':
             self.sess.run(self.train_initializer)
 
-    def _create_pretraining_saver(self):
-        weights = tf.trainable_variables(scope='feature_extractor')
-        self.saver = tf.train.Saver(weights)
-        self.best_saver = tf.train.Saver(weights)
-
-    def _create_detection_saver(self):
-        weights = tf.trainable_variables(scope='feature_extractor')
+    def _create_saver(self):
+        weights = tf.trainable_variables(scope='backone')
         self.pretraining_weight_saver = tf.train.Saver(weights)
         self.saver = tf.train.Saver()
         self.best_saver = tf.train.Saver()
 
-    def _create_pretraining_summary(self):
-        with tf.variable_scope('summaries'):
-            tf.summary.scalar('loss', self.loss)
-            tf.summary.scalar('accuracy', self.accuracy)
-            self.summary_op = tf.summary.merge_all()
-
-    def _create_detection_summary(self):
+    def _create_summary(self):
         with tf.variable_scope('summaries'):
             tf.summary.scalar('loss', self.loss)
             self.summary_op = tf.summary.merge_all()
@@ -250,248 +386,72 @@ class YOLOv3:
         block3 = self._darknet_block(block2, 256, 8, 'block3')
         block4 = self._darknet_block(block3, 512, 8, 'block4')
         block5 = self._darknet_block(block4, 1024, 4, 'block5')
-        down_rate1 = 32.
-        down_rate2 = 16.
-        down_rate3 = 8.
-        return block5, block4, block3, down_rate1, down_rate2, down_rate3
+        return block5, block4, block3
 
     def _yolo3_header(self, bottom, filters, scope, pyramid=None):
-            with tf.variable_scope(scope):
-                if pyramid is not None:
-                    if self.data_format == 'channels_last':
-                        axes = 3
-                        shape = [int(bottom.get_shape()[1]), int(bottom.get_shape()[2])]
-                    else:
-                        axes = 1
-                        shape = [int(bottom.get_shape()[2]), int(bottom.get_shape()[3])]
-                    conv = self._conv_layer(pyramid, filters, 1, 1, False)
-                    conv = tf.image.resize_nearest_neighbor(conv, shape)
-                    conv = tf.concat([bottom, conv], axis=axes)
+        with tf.variable_scope(scope):
+            if pyramid is not None:
+                if self.data_format == 'channels_last':
+                    axes = 3
+                    shape = [int(bottom.get_shape()[1]), int(bottom.get_shape()[2])]
                 else:
-                    conv = bottom
-                conv1 = self._conv_layer(conv, filters/2, 1, 1)
-                conv2 = self._conv_layer(conv1, filters, 3, 1)
-                conv3 = self._conv_layer(conv2, filters/2, 1, 1)
-                conv4 = self._conv_layer(conv3, filters, 3, 1)
-                conv5 = self._conv_layer(conv4, filters/2, 1, 1)
-                conv6 = self._conv_layer(conv5, filters, 3, 1)
-                pred = self._conv_layer(conv6, self.final_units, 1, 1)
-                return pred, conv5
+                    axes = 1
+                    shape = [int(bottom.get_shape()[2]), int(bottom.get_shape()[3])]
+                conv = self._conv_layer(pyramid, filters, 1, 1, False)
+                conv = tf.image.resize_nearest_neighbor(conv, shape)
+                conv = tf.concat([bottom, conv], axis=axes)
+            else:
+                conv = bottom
+            conv1 = self._conv_layer(conv, filters/2, 1, 1)
+            conv2 = self._conv_layer(conv1, filters, 3, 1)
+            conv3 = self._conv_layer(conv2, filters/2, 1, 1)
+            conv4 = self._conv_layer(conv3, filters, 3, 1)
+            conv5 = self._conv_layer(conv4, filters/2, 1, 1)
+            conv6 = self._conv_layer(conv5, filters, 3, 1)
+            pred = self._conv_layer(conv6, self.final_units, 1, 1)
+            return pred, conv5
 
-    def _get_normlized_pred(self, pred, pshape, priors, downsampling_rate):
-        topleft_y = tf.range(0., tf.cast(pshape[1], tf.float32), dtype=tf.float32)
-        topleft_x = tf.range(0., tf.cast(pshape[2], tf.float32), dtype=tf.float32)
-        topleft_y = tf.reshape(topleft_y, [1, -1, 1, 1, 1])
-        topleft_x = tf.reshape(topleft_x, [1, 1, -1, 1, 1])
-        topleft_y = tf.tile(topleft_y, [1, 1, pshape[2], 1, 1])
-        topleft_x = tf.tile(topleft_x, [1, pshape[1], 1, 1, 1])
-        topleft = tf.concat([topleft_y, topleft_x], -1)
-
-        pclass = pred[..., :self.num_classes*self.num_priors]
-        pbbox_yx = pred[..., self.num_classes*self.num_priors:self.num_classes*self.num_priors+self.num_priors*2]
-        pbbox_hw = pred[..., self.num_classes*self.num_priors+self.num_priors*2:self.num_classes*self.num_priors+self.num_priors*4]
-        pconf = pred[..., self.num_classes*self.num_priors+self.num_priors*4:]
-
-        pclasst = tf.nn.sigmoid(tf.reshape(pclass, [self.batch_size, -1, self.num_classes]))
-        pbbox_yx = tf.nn.sigmoid(tf.reshape(pbbox_yx, [self.batch_size, pshape[1], pshape[2], self.num_priors, 2]))
-        pbbox_hw = tf.reshape(pbbox_hw, [self.batch_size, pshape[1], pshape[2], self.num_priors, 2])
-        pbbox_loss = tf.concat([pbbox_yx, pbbox_hw], axis=-1)
-        pbbox_loss = tf.reshape(pbbox_loss, [self.batch_size, -1, 4])
-
-        pconft = tf.nn.sigmoid(tf.reshape(pconf, [self.batch_size, -1]))
-        npbbox_yx = pbbox_yx + topleft
-        npbbox_hw = tf.exp(pbbox_hw) * priors
-        npbbox_y1x1 = npbbox_yx - npbbox_hw / 2
-        npbbox_y2x2 = npbbox_yx + npbbox_hw / 2
-        npbbox_y1x1 = tf.reshape(npbbox_y1x1, [self.batch_size, -1, 2])
-        npbbox_y2x2 = tf.reshape(npbbox_y2x2, [self.batch_size, -1, 2])
-        npbbox_y1x1y2x2t = tf.concat([npbbox_y1x1, npbbox_y2x2], axis=-1)
-        npbbox_y1x1y2x2t = tf.reshape(npbbox_y1x1y2x2t, [self.batch_size, -1, 4]) * downsampling_rate
-        npbbox_hw = tf.reshape(npbbox_hw, [self.batch_size, -1, 2])
-        return topleft, pclasst, pbbox_loss, pconft, npbbox_y1x1, npbbox_y2x2, npbbox_y1x1y2x2t, npbbox_hw
-
-    def _get_normlized_priors(self, topleft, pshape, priors):
-        abbox_yx = topleft + 0.5
-        abbox_yx = tf.tile(abbox_yx, [1, 1, 1, self.num_priors, 1])
+    def _get_priors(self, pshape, priors):
+        tl_y = tf.range(0., tf.cast(pshape[1], tf.float32), dtype=tf.float32)
+        tl_x = tf.range(0., tf.cast(pshape[2], tf.float32), dtype=tf.float32)
+        tl_y_ = tf.reshape(tl_y, [-1, 1, 1, 1])
+        tl_x_ = tf.reshape(tl_x, [1, -1, 1, 1])
+        tl_y_ = tf.tile(tl_y_, [1, pshape[2], 1, 1])
+        tl_x_ = tf.tile(tl_x_, [pshape[1], 1, 1, 1])
+        tl = tf.concat([tl_y_, tl_x_], -1)
+        abbox_yx = tl + 0.5
+        abbox_yx = tf.tile(abbox_yx, [1, 1, self.num_priors, 1])
         abbox_hw = priors
-        abbox_hw = tf.tile(abbox_hw, [1, pshape[1], pshape[2], 1, 1])
+        abbox_hw = tf.tile(abbox_hw, [pshape[1], pshape[2], 1, 1])
         abbox_y1x1 = abbox_yx - abbox_hw / 2
         abbox_y2x2 = abbox_yx + abbox_hw / 2
-        abbox_hw = tf.reshape(abbox_hw, [1, -1, 2])
-        abbox_y1x1 = tf.reshape(abbox_y1x1, [1, -1, 2])
-        abbox_y2x2 = tf.reshape(abbox_y2x2, [1, -1, 2])
-        return abbox_hw, abbox_y1x1, abbox_y2x2
+        return abbox_yx, abbox_hw, abbox_y1x1, abbox_y2x2
 
-    def _get_normlized_ground_truth(self, downsampling_rate):
+    def _get_normlized_gn(self, downsampling_rate, i):
+
+        slice_index = tf.argmin(self.ground_truth[i, ...], axis=0)[0]
+        ground_truth = tf.gather(self.ground_truth[i, ...], tf.range(0, slice_index, dtype=tf.int64))
         scale = tf.constant([downsampling_rate, downsampling_rate, downsampling_rate, downsampling_rate, 1], dtype=tf.float32)
-        scale = tf.reshape(scale, [1, 1, 5])
-        ground_truth = self.ground_truth / scale
-        return ground_truth
+        scale = tf.reshape(scale, [1, 5])
+        gn = ground_truth / scale
+        return gn[..., :2], gn[..., 2:4], tf.cast(gn[..., 4], tf.int32)
 
-    def _get_responsible_priors(self, nground_truth, abbox_hw, abbox_y1x1, abbox_y2x2):
-        slice_index = tf.argmin(nground_truth, axis=0)[0]
-        nground_truth = tf.gather(nground_truth, tf.range(0, slice_index, dtype=tf.int64))
-        ngbbox_yx = nground_truth[..., 0:2]
-        ngbbox_hw = nground_truth[..., 2:4]
-        ngbbox_yx = tf.reshape(ngbbox_yx, [-1, 1, 2])
-        ngbbox_hw = tf.reshape(ngbbox_hw, [-1, 1, 2])
-        gshape = tf.shape(ngbbox_yx)
-        ngbbox_y1x1 = ngbbox_yx - ngbbox_hw / 2
-        ngbbox_y2x2 = ngbbox_yx + ngbbox_hw / 2
-
-        ashape = tf.shape(abbox_hw)
-        ngbbox_hwti = tf.tile(ngbbox_hw, [1, ashape[1], 1])
-        ngbbox_y1x1ti = tf.tile(ngbbox_y1x1, [1, ashape[1], 1])
-        ngbbox_y2x2ti = tf.tile(ngbbox_y2x2, [1, ashape[1], 1])
-        abbox_hwti = tf.tile(abbox_hw, [gshape[0], 1, 1])
-        abbox_y1x1ti = tf.tile(abbox_y1x1, [gshape[0], 1, 1])
-        abbox_y2x2ti = tf.tile(abbox_y2x2, [gshape[0], 1, 1])
-
-        agiou_y1x1ti = tf.maximum(abbox_y1x1ti, ngbbox_y1x1ti)
-        agiou_y2x2ti = tf.minimum(abbox_y2x2ti, ngbbox_y2x2ti)
-        agiou_area = tf.reduce_prod(tf.maximum(agiou_y2x2ti - agiou_y1x1ti, 0), axis=-1)
-        aarea = tf.reduce_prod(abbox_hwti, axis=-1)
-        ngarea = tf.reduce_prod(ngbbox_hwti, axis=-1)
-        agiou_rate = agiou_area / (aarea + ngarea - agiou_area)
-        rpriors_index = tf.argmax(agiou_rate, axis=-1)
-        ragiou_rate = tf.reduce_max(agiou_rate, axis=-1)
-        return rpriors_index, ragiou_rate
-
-    def _compute_one_image_loss(self, pclass, npbbox_loss, npbbox_hw, npbbox_y1x1, npbbox_y2x2,
-                                pconf, abbox_hw, rpriors_index, rmask, nground_truth):
-        slice_index = tf.argmin(nground_truth, axis=0)[0]
-        nground_truth = tf.gather(nground_truth, tf.range(0, slice_index, dtype=tf.int64))
-        nground_truth = tf.boolean_mask(nground_truth, rmask)
-        rpriors_index = tf.boolean_mask(rpriors_index, rmask)
-        ngbbox_yx = nground_truth[..., 0:2]
-        ngbbox_hw = nground_truth[..., 2:4]
-        gclass_id = tf.cast(nground_truth[..., 4], tf.int32)
-        gbbox_yx_loss = ngbbox_yx - tf.floor(ngbbox_yx)
-        gbbox_hw_loss = ngbbox_hw
-        ngbbox_yx = tf.reshape(ngbbox_yx, [-1, 1, 2])
-        ngbbox_hw = tf.reshape(ngbbox_hw, [-1, 1, 2])
-        gshape = tf.shape(ngbbox_yx)
-        ngbbox_y1x1 = ngbbox_yx - ngbbox_hw / 2
-        ngbbox_y2x2 = ngbbox_yx + ngbbox_hw / 2
-
-        npbbox_hwti = tf.reshape(npbbox_hw, [1, -1, 2])
-        npbbox_y1x1ti = tf.reshape(npbbox_y1x1, [1, -1, 2])
-        npbbox_y2x2ti = tf.reshape(npbbox_y2x2, [1, -1, 2])
-        pshape = tf.shape(npbbox_hwti)
-        npbbox_hwti = tf.tile(npbbox_hwti, [gshape[0], 1, 1])
-        npbbox_y1x1ti = tf.tile(npbbox_y1x1ti, [gshape[0], 1, 1])
-        npbbox_y2x2ti = tf.tile(npbbox_y2x2ti, [gshape[0], 1, 1])
-        ngbbox_hwti = tf.tile(ngbbox_hw, [1, pshape[1], 1])
-        ngbbox_y1x1ti = tf.tile(ngbbox_y1x1, [1, pshape[1], 1])
-        ngbbox_y2x2ti = tf.tile(ngbbox_y2x2, [1, pshape[1], 1])
-
-        rpriors = tf.gather(tf.squeeze(abbox_hw), rpriors_index)
-
-        gbbox_hw_loss = tf.log(gbbox_hw_loss / rpriors)
-        gbbox_loss = tf.concat([gbbox_yx_loss, gbbox_hw_loss], axis=-1)
-        rnpbbox_loss = tf.gather(npbbox_loss, rpriors_index)
-
-        npgiou_y1x1ti = tf.maximum(npbbox_y1x1ti, ngbbox_y1x1ti)
-        npgiou_y2x2ti = tf.minimum(npbbox_y2x2ti, ngbbox_y2x2ti)
-        npgiou_area = tf.reduce_prod(tf.maximum(npgiou_y2x2ti - npgiou_y1x1ti, 0), axis=-1)
-        nparea = tf.reduce_prod(npbbox_hwti, axis=-1)
-        ngarea = tf.reduce_prod(ngbbox_hwti, axis=-1)
-        npgiou_rate = npgiou_area / (nparea + ngarea - npgiou_area)
-
-        rnpgiou_index = tf.concat([tf.expand_dims(tf.range(0, gshape[0]), -1),
-                                   tf.expand_dims(tf.cast(rpriors_index, tf.int32), -1)], axis=-1)
-        rnpgiou_rate = tf.gather_nd(npgiou_rate, rnpgiou_index)
-        rpconf = tf.gather(pconf, rpriors_index)
-        rpclass = tf.gather(pclass, rpriors_index)
-
-        nobj_mask = tf.reduce_min(npgiou_rate, axis=0)
-        nobj_mask = tf.cast(nobj_mask <= 0.6, tf.float32)
-        detectmask, _ = tf.unique(rpriors_index)
-        detectmask = tf.contrib.framework.sort(detectmask)
-        detectmask = tf.reshape(detectmask, [-1, 1])
-        detectmask = tf.sparse.SparseTensor(tf.concat([detectmask, tf.zeros_like(detectmask)], axis=-1),
-                                            tf.squeeze(tf.ones_like(detectmask)), dense_shape=[pshape[1], 1])
-        detectmask = tf.reshape(tf.cast(tf.sparse.to_dense(detectmask), tf.float32), [-1])
-        noobj_loss = self.noobj_scale * tf.reduce_sum((1. - detectmask) * nobj_mask * tf.square(pconf))
-        if self.rescore_confidence:
-            obj_loss = self.obj_scale * tf.reduce_sum(tf.square(rnpgiou_rate - rpconf))
-        else:
-            obj_loss = self.obj_scale * tf.reduce_sum(tf.square(1. - rpconf))
-        obj_loss += noobj_loss
-
-        coord_loss = self.coord_sacle * tf.reduce_sum(tf.square(gbbox_loss - rnpbbox_loss))
-
-        gclass = tf.one_hot(gclass_id, self.num_classes)
-        class_loss = self.class_scale * tf.reduce_sum(tf.keras.backend.binary_crossentropy(gclass, rpclass))
-        loss = obj_loss + coord_loss + class_loss
-        return loss
-
-    def _train_pretraining_epoch(self, lr, writer=None, data_provider=None):
+    def train_one_epoch(self, lr):
         self.is_training = True
-        if data_provider is not None:
-            self.num_train = data_provider['num_train']
-            self.train_generator = data_provider['train_generator']
-            self.train_initializer, self.train_iterator = self.train_generator
-            if data_provider['val_generator'] is not None:
-                self.num_val = data_provider['num_val']
-                self.val_generator = data_provider['val_generator']
-                self.val_initializer, self.val_iterator = self.val_generator
-            self.data_shape = data_provider['data_shape']
-            shape = [self.batch_size].extend(data_provider['data_shape'])
-            self.images.set_shape(shape)
-        self.sess.run(self.train_initializer)
-        mean_loss = []
-        mean_acc = []
-        num_iters = self.num_train // self.batch_size
-        for i in range(num_iters):
-            _, loss, acc, summaries = self.sess.run([self.train_op, self.loss, self.accuracy, self.summary_op],
-                                                    feed_dict={self.lr: lr})
-            sys.stdout.write('\r>> ' + 'iters '+str(i)+str('/')+str(num_iters)+' loss '+str(loss)+' acc '+str(acc))
-            sys.stdout.flush()
-            mean_loss.append(loss)
-            mean_acc.append(acc)
-            if writer is not None:
-                writer.add_summary(summaries, global_step=self.global_step)
-        sys.stdout.write('\n')
-        mean_loss = np.mean(mean_loss)
-        mean_acc = np.mean(mean_acc)
-        return mean_loss, mean_acc
-
-    def _train_detection_epoch(self, lr, writer=None, data_provider=None):
-        self.is_training = True
-        if data_provider is not None:
-            self.num_train = data_provider['num_train']
-            self.train_generator = data_provider['train_generator']
-            self.train_initializer, self.train_iterator = self.train_generator
-            if data_provider['val_generator'] is not None:
-                self.num_val = data_provider['num_val']
-                self.val_generator = data_provider['val_generator']
-                self.val_initializer, self.val_iterator = self.val_generator
-            self.data_shape = data_provider['data_shape']
-            shape = [self.batch_size].extend(data_provider['data_shape'])
-            self.images.set_shape(shape)
         self.sess.run(self.train_initializer)
         mean_loss = []
         num_iters = self.num_train // self.batch_size
         for i in range(num_iters):
-
-            _, loss, summaries = self.sess.run([self.train_op, self.loss, self.summary_op],
-                                               feed_dict={self.lr: lr})
+            _, loss, _ = self.sess.run([self.train_op, self.loss, self.summary_op],
+                                       feed_dict={self.lr: lr})
             sys.stdout.write('\r>> ' + 'iters '+str(i)+str('/')+str(num_iters)+' loss '+str(loss))
             sys.stdout.flush()
             mean_loss.append(loss)
-            if writer is not None:
-                writer.add_summary(summaries, global_step=self.global_step)
         sys.stdout.write('\n')
         mean_loss = np.mean(mean_loss)
         return mean_loss
 
-    def _test_one_pretraining_batch(self, images):
-        self.is_training = False
-        pred = self.sess.run(self.pred, feed_dict={self.images: images})
-        return pred
-
-    def _test_one_detection_image(self, images):
+    def test_one_image(self, images):
         self.is_training = False
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'))
 
@@ -499,19 +459,7 @@ class YOLOv3:
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'))
         return pred
 
-    def _save_pretraining_weight(self, mode, path):
-        assert(mode in ['latest', 'best'])
-        if mode == 'latest':
-            saver = self.saver
-        else:
-            saver = self.best_saver
-        if not tf.gfile.Exists(os.path.dirname(path)):
-            tf.gfile.MakeDirs(os.path.dirname(path))
-            print(os.path.dirname(path), 'does not exist, create it done')
-        saver.save(self.sess, path, global_step=self.global_step)
-        print('save', mode, 'model in', path, 'successfully')
-
-    def _save_detection_weight(self, mode, path):
+    def save_weight(self, mode, path):
         assert(mode in ['latest', 'best'])
         if mode == 'latest':
             saver = self.saver
