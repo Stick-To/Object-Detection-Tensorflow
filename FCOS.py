@@ -325,10 +325,9 @@ class FCOS:
         tb_max = tf.maximum(dist_t, dist_b)
         center_pred = tf.squeeze(center_pred)
         center_gt = tf.sqrt(lr_min*tb_min/(lr_max*tb_max+1e-12))
-        center_pos_loss = -center_gt*tf.log_sigmoid(center_pred) * loc
-        center_neg_loss = -(1.-center_gt)*(-center_pred+tf.log_sigmoid(center_pred)) * (1.-loc)
-        center_loss = tf.reduce_sum(center_pos_loss) + tf.reduce_sum(center_neg_loss)
         # center_loss = tf.square(center_pred - center_gt)
+        center_loss = tf.keras.backend.binary_crossentropy(output=center_pred, target=center_gt, from_logits=True)
+        center_loss = tf.reduce_sum(center_loss)
 
         zero_like_heat = tf.expand_dims(tf.zeros(pshape, dtype=tf.float32), axis=-1)
         heatmap_gt = []
