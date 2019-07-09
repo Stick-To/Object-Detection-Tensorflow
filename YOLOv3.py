@@ -243,66 +243,68 @@ class YOLOv3:
                 nogn2_mask = tf.reshape(nogn2_mask, [-1])
                 nogn3_mask = tf.reshape(nogn3_mask, [-1])
 
-                a1bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a1bbox_y1x1, [-1, self.num_priors, 2]), nogn1_mask), 1)
-                a2bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a2bbox_y1x1, [-1, self.num_priors, 2]), nogn2_mask), 1)
-                a3bbox_y1x1_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a3bbox_y1x1, [-1, self.num_priors, 2]), nogn3_mask), 1)
-                a1bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a1bbox_y2x2, [-1, self.num_priors, 2]), nogn1_mask), 1)
-                a2bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a2bbox_y2x2, [-1, self.num_priors, 2]), nogn2_mask), 1)
-                a3bbox_y2x2_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(a3bbox_y2x2, [-1, self.num_priors, 2]), nogn3_mask), 1)
+                p1bbox_yx_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.sigmoid(p1bbox_yx[i,...])+a1bbox_yx, [-1, self.num_priors, 2]), nogn1_mask), 1)
+                p1bbox_hw_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.exp(p1bbox_hw[i,...])*a1bbox_hw, [-1, self.num_priors, 2]), nogn1_mask), 1)
+                p2bbox_yx_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.sigmoid(p2bbox_yx[i,...])+a2bbox_yx, [-1, self.num_priors, 2]), nogn2_mask), 1)
+                p2bbox_hw_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.exp(p2bbox_hw[i,...])*a2bbox_hw, [-1, self.num_priors, 2]), nogn2_mask), 1)
+                p3bbox_yx_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.sigmoid(p3bbox_yx[i,...])+a3bbox_yx, [-1, self.num_priors, 2]), nogn3_mask), 1)
+                p3bbox_hw_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.exp(p3bbox_hw[i,...])*a3bbox_hw, [-1, self.num_priors, 2]), nogn3_mask), 1)
+                p1bbox_y1x1_nobest = p1bbox_yx_nobest - p1bbox_hw_nobest/2.
+                p1bbox_y2x2_nobest = p1bbox_yx_nobest + p1bbox_hw_nobest/2.
+                p2bbox_y1x1_nobest = p2bbox_yx_nobest - p2bbox_hw_nobest/2.
+                p2bbox_y2x2_nobest = p2bbox_yx_nobest + p2bbox_hw_nobest/2.
+                p3bbox_y1x1_nobest = p3bbox_yx_nobest - p3bbox_hw_nobest/2.
+                p3bbox_y2x2_nobest = p3bbox_yx_nobest + p3bbox_hw_nobest/2.
+
                 p1obj_nobest = tf.boolean_mask(tf.reshape(p1obj[i, ...], [-1, self.num_priors]), nogn1_mask)
                 p2obj_nobest = tf.boolean_mask(tf.reshape(p2obj[i, ...], [-1, self.num_priors]), nogn2_mask)
                 p3obj_nobest = tf.boolean_mask(tf.reshape(p3obj[i, ...], [-1, self.num_priors]), nogn3_mask)
                 num_g1 = tf.shape(gn1_y1x1i)[0]
                 num_g2 = tf.shape(gn2_y1x1i)[0]
                 num_g3 = tf.shape(gn3_y1x1i)[0]
-                num_a1 = tf.shape(a1bbox_y1x1_nobest)[0]
-                num_a2 = tf.shape(a2bbox_y1x1_nobest)[0]
-                num_a3 = tf.shape(a3bbox_y1x1_nobest)[0]
-                gn1_y1x1i = tf.tile(tf.expand_dims(gn1_y1x1i, 0), [num_a1, 1, 1, 1])
-                gn1_y2x2i = tf.tile(tf.expand_dims(gn1_y2x2i, 0), [num_a1, 1, 1, 1])
-                gn2_y1x1i = tf.tile(tf.expand_dims(gn2_y1x1i, 0), [num_a2, 1, 1, 1])
-                gn2_y2x2i = tf.tile(tf.expand_dims(gn2_y2x2i, 0), [num_a2, 1, 1, 1])
-                gn3_y1x1i = tf.tile(tf.expand_dims(gn3_y1x1i, 0), [num_a3, 1, 1, 1])
-                gn3_y2x2i = tf.tile(tf.expand_dims(gn3_y2x2i, 0), [num_a3, 1, 1, 1])
-                a1bbox_y1x1_nobest = tf.tile(a1bbox_y1x1_nobest, [1, num_g1, 1, 1])
-                a2bbox_y1x1_nobest = tf.tile(a2bbox_y1x1_nobest, [1, num_g2, 1, 1])
-                a3bbox_y1x1_nobest = tf.tile(a3bbox_y1x1_nobest, [1, num_g3, 1, 1])
-                a1bbox_y2x2_nobest = tf.tile(a1bbox_y2x2_nobest, [1, num_g1, 1, 1])
-                a2bbox_y2x2_nobest = tf.tile(a2bbox_y2x2_nobest, [1, num_g2, 1, 1])
-                a3bbox_y2x2_nobest = tf.tile(a3bbox_y2x2_nobest, [1, num_g3, 1, 1])
-                ag1iou_y1x1 = tf.maximum(gn1_y1x1i, a1bbox_y1x1_nobest)
-                ag1iou_y2x2 = tf.minimum(gn1_y2x2i, a1bbox_y2x2_nobest)
-                ag2iou_y1x1 = tf.maximum(gn2_y1x1i, a2bbox_y1x1_nobest)
-                ag2iou_y2x2 = tf.minimum(gn2_y2x2i, a2bbox_y2x2_nobest)
-                ag3iou_y1x1 = tf.maximum(gn3_y1x1i, a3bbox_y1x1_nobest)
-                ag3iou_y2x2 = tf.minimum(gn3_y2x2i, a3bbox_y2x2_nobest)
-                ag1iou_area = tf.reduce_prod(ag1iou_y2x2 - ag1iou_y1x1, axis=-1)
-                ag2iou_area = tf.reduce_prod(ag2iou_y2x2 - ag2iou_y1x1, axis=-1)
-                ag3iou_area = tf.reduce_prod(ag3iou_y2x2 - ag3iou_y1x1, axis=-1)
-                a1area = tf.reduce_prod(a1bbox_y2x2_nobest-a1bbox_y1x1_nobest, axis=-1)
+                num_p1 = tf.shape(p1bbox_y1x1_nobest)[0]
+                num_p2 = tf.shape(p2bbox_y1x1_nobest)[0]
+                num_p3 = tf.shape(p3bbox_y1x1_nobest)[0]
+                gn1_y1x1i = tf.tile(tf.expand_dims(gn1_y1x1i, 0), [num_p1, 1, 1, 1])
+                gn1_y2x2i = tf.tile(tf.expand_dims(gn1_y2x2i, 0), [num_p1, 1, 1, 1])
+                gn2_y1x1i = tf.tile(tf.expand_dims(gn2_y1x1i, 0), [num_p2, 1, 1, 1])
+                gn2_y2x2i = tf.tile(tf.expand_dims(gn2_y2x2i, 0), [num_p2, 1, 1, 1])
+                gn3_y1x1i = tf.tile(tf.expand_dims(gn3_y1x1i, 0), [num_p3, 1, 1, 1])
+                gn3_y2x2i = tf.tile(tf.expand_dims(gn3_y2x2i, 0), [num_p3, 1, 1, 1])
+                p1bbox_y1x1_nobest = tf.tile(p1bbox_y1x1_nobest, [1, num_g1, 1, 1])
+                p2bbox_y1x1_nobest = tf.tile(p2bbox_y1x1_nobest, [1, num_g2, 1, 1])
+                p3bbox_y1x1_nobest = tf.tile(p3bbox_y1x1_nobest, [1, num_g3, 1, 1])
+                p1bbox_y2x2_nobest = tf.tile(p1bbox_y2x2_nobest, [1, num_g1, 1, 1])
+                p2bbox_y2x2_nobest = tf.tile(p2bbox_y2x2_nobest, [1, num_g2, 1, 1])
+                p3bbox_y2x2_nobest = tf.tile(p3bbox_y2x2_nobest, [1, num_g3, 1, 1])
+                pg1iou_y1x1 = tf.maximum(gn1_y1x1i, p1bbox_y1x1_nobest)
+                pg1iou_y2x2 = tf.minimum(gn1_y2x2i, p1bbox_y2x2_nobest)
+                pg2iou_y1x1 = tf.maximum(gn2_y1x1i, p2bbox_y1x1_nobest)
+                pg2iou_y2x2 = tf.minimum(gn2_y2x2i, p2bbox_y2x2_nobest)
+                pg3iou_y1x1 = tf.maximum(gn3_y1x1i, p3bbox_y1x1_nobest)
+                pg3iou_y2x2 = tf.minimum(gn3_y2x2i, p3bbox_y2x2_nobest)
+                pg1iou_area = tf.reduce_prod(pg1iou_y2x2 - pg1iou_y1x1, axis=-1)
+                pg2iou_area = tf.reduce_prod(pg2iou_y2x2 - pg2iou_y1x1, axis=-1)
+                pg3iou_area = tf.reduce_prod(pg3iou_y2x2 - pg3iou_y1x1, axis=-1)
+                p1area = tf.reduce_prod(p1bbox_y2x2_nobest - p1bbox_y1x1_nobest, axis=-1)
                 g1area = tf.reduce_prod(gn1_y2x2i - gn1_y1x1i, axis=-1)
-                a2area = tf.reduce_prod(a2bbox_y2x2_nobest - a2bbox_y1x1_nobest, axis=-1)
+                p2area = tf.reduce_prod(p2bbox_y2x2_nobest - p2bbox_y1x1_nobest, axis=-1)
                 g2area = tf.reduce_prod(gn2_y2x2i - gn2_y1x1i, axis=-1)
-                a3area = tf.reduce_prod(a3bbox_y2x2_nobest - a3bbox_y1x1_nobest, axis=-1)
+                p3area = tf.reduce_prod(p3bbox_y2x2_nobest - p3bbox_y1x1_nobest, axis=-1)
                 g3area = tf.reduce_prod(gn3_y2x2i - gn3_y1x1i, axis=-1)
-                ag1iou = ag1iou_area / (a1area + g1area - ag1iou_area)
-                ag2iou = ag2iou_area / (a2area + g2area - ag2iou_area)
-                ag3iou = ag3iou_area / (a3area + g3area - ag3iou_area)
-                ag1iou = tf.reduce_max(ag1iou, axis=1)
-                ag2iou = tf.reduce_max(ag2iou, axis=1)
-                ag3iou = tf.reduce_max(ag3iou, axis=1)
-                ag1iou_noobj_mask = tf.cast(ag1iou < 0.5, tf.float32)
-                ag2iou_noobj_mask = tf.cast(ag2iou < 0.5, tf.float32)
-                ag3iou_noobj_mask = tf.cast(ag3iou < 0.5, tf.float32)
-                noonj_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag1iou_noobj_mask, logits=p1obj_nobest) * ag1iou_noobj_mask)
-                noonj_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag2iou_noobj_mask, logits=p2obj_nobest) * ag2iou_noobj_mask)
-                noonj_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=1. - ag3iou_noobj_mask, logits=p3obj_nobest) * ag3iou_noobj_mask)
+                pg1iou = pg1iou_area / (p1area + g1area - pg1iou_area)
+                pg2iou = pg2iou_area / (p2area + g2area - pg2iou_area)
+                pg3iou = pg3iou_area / (p3area + g3area - pg3iou_area)
+                pg1iou = tf.reduce_max(pg1iou, axis=1)
+                pg2iou = tf.reduce_max(pg2iou, axis=1)
+                pg3iou = tf.reduce_max(pg3iou, axis=1)
+                noonj_loss1 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(p1obj_nobest), logits=p1obj_nobest) * tf.cast(pg1iou < 0.5, tf.float32))
+                noonj_loss2 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(p2obj_nobest), logits=p2obj_nobest) * tf.cast(pg2iou < 0.5, tf.float32))
+                noonj_loss3 = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(p3obj_nobest), logits=p3obj_nobest) * tf.cast(pg3iou < 0.5, tf.float32))
                 noonj_loss = noonj_loss1 + noonj_loss2 + noonj_loss3
-                # obj_loss1 = tf.reduce_sum((ag1iou - p1obj_nobest) * (1. - ag1iou_noobj_mask))
-                # obj_loss2 = tf.reduce_sum((ag2iou - p2obj_nobest) * (1. - ag2iou_noobj_mask))
-                # obj_loss3 = tf.reduce_sum((ag3iou - p3obj_nobest) * (1. - ag3iou_noobj_mask))
-                loss = self.coord_sacle*coord_loss+self.class_scale*class_loss+self.obj_scale*obj_loss+self.noobj_scale*noonj_loss
-                total_loss.append(loss)
+                pos_loss = (self.coord_sacle*coord_loss+self.class_scale*class_loss+self.obj_scale*obj_loss) / num_gf
+                neg_loss = self.noobj_scale*noonj_loss / num_gf
+                total_loss.append(pos_loss + neg_loss)
             total_loss = tf.reduce_mean(total_loss)
             optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
             self.loss = .5 * total_loss + self.weight_decay * tf.add_n(
