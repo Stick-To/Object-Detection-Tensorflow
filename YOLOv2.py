@@ -145,28 +145,30 @@ class YOLOv2:
                 obj_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(rpobj), logits=rpobj))
                 nogn_mask = tf.reshape(nogn_mask, [-1])
 
-                pbbox_yx_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.sigmoid(pbbox_yx[i, ...])+abbox_yx, [-1, self.num_priors, 2]), nogn_mask), 1)
-                pbbox_hw_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(tf.exp(pbbox_hw[i, ...])*abbox_hw, [-1, self.num_priors, 2]), nogn_mask), 1)
-                pbbox_y1x1_nobest = pbbox_yx_nobest - pbbox_hw_nobest/2.
-                pbbox_y2x2_nobest = pbbox_yx_nobest + pbbox_hw_nobest/2.
+                abbox_yx_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(abbox_yx-abbox_hw/2., [-1, self.num_priors, 2]), nogn_mask), 1)
+                abbox_hw_nobest = tf.expand_dims(tf.boolean_mask(tf.reshape(abbox_yx+abbox_hw/2., [-1, self.num_priors, 2]), nogn_mask), 1)
+                abbox_y1x1_nobest = abbox_yx_nobest - abbox_hw_nobest/2.
+                abbox_y2x2_nobest = abbox_yx_nobest + abbox_hw_nobest/2.
                 pobj_nobest = tf.boolean_mask(tf.reshape(pobj[i, ...], [-1, self.num_priors]), nogn_mask)
+
+
                 num_g = tf.shape(gn_y1x1i)[0]
-                num_p = tf.shape(pbbox_y1x1_nobest)[0]
+                num_p = tf.shape(abbox_y1x1_nobest)[0]
                 gn_y1x1i = tf.tile(tf.expand_dims(gn_y1x1i, 0), [num_p, 1, 1, 1])
                 gn_y2x2i = tf.tile(tf.expand_dims(gn_y2x2i, 0), [num_p, 1, 1, 1])
 
-                pbbox_y1x1_nobest = tf.tile(pbbox_y1x1_nobest, [1, num_g, 1, 1])
-                pbbox_y2x2_nobest = tf.tile(pbbox_y2x2_nobest, [1, num_g, 1, 1])
-                pgiou_y1x1 = tf.maximum(gn_y1x1i, pbbox_y1x1_nobest)
-                pgiou_y2x2 = tf.minimum(gn_y2x2i, pbbox_y2x2_nobest)
+                abbox_y1x1_nobest = tf.tile(abbox_y1x1_nobest, [1, num_g, 1, 1])
+                abbox_y2x2_nobest = tf.tile(abbox_y2x2_nobest, [1, num_g, 1, 1])
+                agiou_y1x1 = tf.maximum(gn_y1x1i, abbox_y1x1_nobest)
+                agiou_y2x2 = tf.minimum(gn_y2x2i, abbox_y2x2_nobest)
 
-                pgiou_area = tf.reduce_prod(pgiou_y2x2 - pgiou_y1x1, axis=-1)
-                parea = tf.reduce_prod(pbbox_y2x2_nobest - pbbox_y1x1_nobest, axis=-1)
+                agiou_area = tf.reduce_prod(agiou_y2x2 - agiou_y1x1, axis=-1)
+                aarea = tf.reduce_prod(abbox_y2x2_nobest - abbox_y1x1_nobest, axis=-1)
                 garea = tf.reduce_prod(gn_y2x2i - gn_y1x1i, axis=-1)
-                pgiou = pgiou_area / (parea + garea - pgiou_area+1e-12)
-                pgiou = tf.reduce_max(pgiou, axis=1)
+                agiou = agiou_area / (aarea + garea - agiou_area)
+                agiou = tf.reduce_max(agiou, axis=1)
 
-                noobj_loss = tf.reduce_sum(tf.square(tf.zeros_like(pobj_nobest)-tf.sigmoid(pobj_nobest))*tf.cast(pgiou < 0.5, tf.float32))
+                noobj_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(pobj_nobest), logits=pobj_nobest)*tf.cast(agiou <= 0.6, tf.float32))
                 loss = self.coord_sacle * coord_loss + self.class_scale * class_loss + self.obj_scale * obj_loss + self.noobj_scale * noobj_loss
                 total_loss.append(loss)
             total_loss = tf.reduce_mean(total_loss)
