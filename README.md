@@ -37,6 +37,7 @@ fill in dict 'image_augmentor_config' in test-model.py
 
 see utils.image_augmentor.py for details
 
+see https://github.com/Stick-To/Online_Image_Augmentor_tensorflow for details
 # config model
 
 fill in dict 'config' in test-model.py
