@@ -34,7 +34,7 @@ config = {
 image_augmentor_config = {
     'data_format': 'channels_last',
     'output_shape': [300, 300],
-    'zoom_size': [320, 320],
+    # 'zoom_size': [320, 320],
     'crop_method': 'random',
     'flip_prob': [0., 0.5],
     'fill_mode': 'BILINEAR',
@@ -45,8 +45,8 @@ image_augmentor_config = {
     'pad_truth_to': 60,
 }
 
-data = ['./test/test_00000-of-00005.tfrecord',
-        './test/test_00001-of-00005.tfrecord']
+data = os.listdir('./data/')
+data = [os.path.join('./data/', name) for name in data]
 
 train_gen = voc_utils.get_generator(data,
                                     batch_size, buffer_size, image_augmentor_config)

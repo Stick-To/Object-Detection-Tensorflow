@@ -74,11 +74,22 @@ class PFPNetR:
     def _build_graph(self):
         with tf.variable_scope('feature_extractor'):
             feat1, feat2, feat3, feat4, stride1, stride2, stride3, stride4 = self._feature_extractor(self.images)
-            feat1 = tf.nn.l2_normalize(feat1, axis=3 if self.data_format == 'channels_last' else 1)
-            feat1_norm_factor = tf.get_variable('feat1_l2_norm', initializer=tf.constant(10.))
+            axes = 3 if self.data_format == 'channels_last' else 1
+            feat1 = tf.nn.l2_normalize(feat1, axis=axes)
+            feat1_norm_factor = tf.get_variable('feat1_l2_norm', shape=[1], initializer=tf.constant_initializer(10.))
+            feat2 = tf.nn.l2_normalize(feat2, axis=axes)
+            feat2_norm_factor = tf.get_variable('feat2_l2_norm', shape=[1], initializer=tf.constant_initializer(8.))
+            feat1_channels = tf.shape(feat1)[axes]
+            feat1_norm_factor = tf.tile(feat1_norm_factor, [feat1_channels])
+            feat2_channels = tf.shape(feat2)[axes]
+            feat2_norm_factor = tf.tile(feat2_norm_factor, [feat2_channels])
+            if self.data_format == 'channels_last':
+                feat1_norm_factor = tf.reshape(feat1_norm_factor, [1, 1, 1, -1])
+                feat2_norm_factor = tf.reshape(feat2_norm_factor, [1, 1, 1, -1])
+            else:
+                feat1_norm_factor = tf.reshape(feat1_norm_factor, [1, -1, 1, 1])
+                feat2_norm_factor = tf.reshape(feat2_norm_factor, [1, 1, 1, -1])
             feat1 = feat1_norm_factor * feat1
-            feat2 = tf.nn.l2_normalize(feat2, axis=3 if self.data_format == 'channels_last' else 1)
-            feat2_norm_factor = tf.get_variable('feat2_l2_norm', initializer=tf.constant(8.))
             feat2 = feat2_norm_factor * feat2
         with tf.variable_scope('ARM'):
             arm1loc, arm1conf = self._arm(feat1, 'arm1')

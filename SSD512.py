@@ -70,8 +70,15 @@ class SSD512:
     def _build_graph(self):
         with tf.variable_scope('feature_extractor'):
             feat1, feat2, feat3, feat4, feat5, feat6, feat7 = self._feature_extractor(self.images)
-            feat1 = tf.nn.l2_normalize(feat1, axis=3 if self.data_format == 'channels_last' else 1)
-            norm_factor = tf.get_variable('l2_norm_factor', initializer=tf.constant(20.))
+            axes = 3 if self.data_format == 'channels_last' else 1
+            feat1 = tf.nn.l2_normalize(feat1, axis=axes)
+            channels = tf.shape(feat1)[axes]
+            norm_factor = tf.get_variable('l2_norm_factor', shape=[1], initializer=tf.constant_initializer(20.))
+            norm_factor = tf.tile(norm_factor, [channels])
+            if self.data_format == 'channels_last':
+                norm_factor = tf.reshape(norm_factor, [1, 1, 1, -1])
+            else:
+                norm_factor = tf.reshape(norm_factor, [1, -1, 1, 1])
             feat1 = norm_factor * feat1
         with tf.variable_scope('regressor'):
             pred1 = self._conv_layer(feat1, 4*(self.num_classes+4), 3, 1, 'pred1')
