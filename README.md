@@ -25,7 +25,7 @@ FCOS
 
 # Train your own data
 # Train your own data
-# 1. TFRecord generation
+## 1. TFRecord generation
 
 1) voc format dataset
 
@@ -33,33 +33,33 @@ FCOS
 
 3) run utils.test_voc_utils.py
 
-# 2. config online image augmentor
+## 2. config online image augmentor
 
 fill in dict 'image_augmentor_config' in test-model.py
 
 see utils.image_augmentor.py for details
 
 see https://github.com/Stick-To/Online_Image_Augmentor_tensorflow for details
-# 3. config model
+## 3. config model
 
 fill in dict 'config' in test-model.py
 
 
-# 4. Train
+## 4. Train
 run test-model.py
 
 The pre-trained vgg_16.ckpt could be downloaded from http://download.tensorflow.org/models/vgg_16_2016_08_28.tar.gz
 
-# 5. Test
+## 5. Test
 run annotated code in test-model.py
 
-# 6. ImageNet pretraining
+## 6. ImageNet pretraining
 see utils.tfrecord_imagenet_utils.py
 
-# 7. different conv backone
+## 7. different conv backone
 https://github.com/Stick-To/Deep_Conv_Backone
 
-# 8. Instantiation of result 
+## 8. Instantiation of result 
  corresponding repository in https://github.com/Stick-To
  
 # Experimental Environment
