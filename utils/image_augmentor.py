@@ -180,7 +180,7 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
                 )
 
     if rotate is not None:
-        angles = tf.random_uniform([], rotate[0], rotate[1]) * 3.1415926 / 180.
+        angles = tf.random_uniform([], rotate[1], rotate[2]) * 3.1415926 / 180.
         image = tf.contrib.image.rotate(image, angles, 'BILINEAR')
         if ground_truth is not None:
             angles = -angles
