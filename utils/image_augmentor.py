@@ -59,6 +59,13 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
         if not rotate[1] <= rotate[2]:
             raise Exception("rotate[1] can't  grater than rotate[2]")
 
+    image_copy = image
+
+    input_h, input_w, input_c = input_shape[0], input_shape[1], input_shape[2]
+    input_h_f, input_w_f, input_c_f = tf.cast(input_h, tf.float32), tf.cast(input_w, tf.float32), \
+                                      tf.cast(input_c, tf.float32)
+    output_h_f, output_w_f = float(output_shape[0]), float(output_shape[1])
+
     if fill_mode == 'CONSTANT':
         keep_aspect_ratios = True
     fill_mode_project = {
@@ -67,16 +74,13 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
         'BICUBIC': tf.image.ResizeMethod.BICUBIC
     }
     if ground_truth is not None:
-        ymin = tf.reshape(ground_truth[:, 0], [-1, 1])
-        ymax = tf.reshape(ground_truth[:, 1], [-1, 1])
-        xmin = tf.reshape(ground_truth[:, 2], [-1, 1])
-        xmax = tf.reshape(ground_truth[:, 3], [-1, 1])
-        class_id = tf.reshape(ground_truth[:, 4], [-1, 1])
-        yy = (ymin + ymax) / 2.
-        xx = (xmin + xmax) / 2.
-        hh = ymax - ymin
-        ww = xmax -xmin
-    image_copy = image
+        ymin = ground_truth[:, 0:1]
+        ymax = ground_truth[:, 1:2]
+        xmin = ground_truth[:, 2:3]
+        xmax = ground_truth[:, 3:4]
+        class_id = ground_truth[:, 4:5]
+        ground_truth_copy = tf.concat([ymin/2.+ymax/2., xmin/2.+xmax/2., ymax-ymin, xmax-xmin, class_id], axis=-1)
+
     if data_format == 'channels_first':
         image = tf.transpose(image, [1, 2, 0])
     input_h, input_w, input_c = input_shape[0], input_shape[1], input_shape[2]
@@ -180,68 +184,84 @@ def image_augmentor(image, input_shape, data_format, output_shape, zoom_size=Non
                 )
 
     if rotate is not None:
-        angles = tf.random_uniform([], rotate[1], rotate[2]) * 3.1415926 / 180.
-        image = tf.contrib.image.rotate(image, angles, 'BILINEAR')
-        if ground_truth is not None:
-            angles = -angles
-            rotate_center_x = (output_w - 1.) / 2.
-            rotate_center_y = (output_h - 1.) / 2.
-            offset_x = rotate_center_x * (1-tf.cos(angles)) + rotate_center_y * tf.sin(angles)
-            offset_y = rotate_center_y * (1-tf.cos(angles)) - rotate_center_x * tf.sin(angles)
-            xminymin_x = xmin * tf.cos(angles) - ymin * tf.sin(angles) + offset_x
-            xminymin_y = xmin * tf.sin(angles) + ymin * tf.cos(angles) + offset_y
-            xmaxymax_x = xmax * tf.cos(angles) - ymax * tf.sin(angles) + offset_x
-            xmaxymax_y = xmax * tf.sin(angles) + ymax * tf.cos(angles) + offset_y
-            xminymax_x = xmin * tf.cos(angles) - ymax * tf.sin(angles) + offset_x
-            xminymax_y = xmin * tf.sin(angles) + ymax * tf.cos(angles) + offset_y
-            xmaxymin_x = xmax * tf.cos(angles) - ymin * tf.sin(angles) + offset_x
-            xmaxymin_y = xmax * tf.sin(angles) + ymin * tf.cos(angles) + offset_y
-            xmin = tf.reduce_min(tf.concat([xminymin_x, xmaxymax_x, xminymax_x, xmaxymin_x], axis=-1), axis=-1, keepdims=True)
-            ymin = tf.reduce_min(tf.concat([xminymin_y, xmaxymax_y, xminymax_y, xmaxymin_y], axis=-1), axis=-1, keepdims=True)
-            xmax = tf.reduce_max(tf.concat([xminymin_x, xmaxymax_x, xminymax_x, xmaxymin_x], axis=-1), axis=-1, keepdims=True)
-            ymax = tf.reduce_max(tf.concat([xminymin_y, xmaxymax_y, xminymax_y, xmaxymin_y], axis=-1), axis=-1, keepdims=True)
+        rotate_prob, angmin, angmax = rotate[0], rotate[1], rotate[2]
+        rp = tf.random.uniform([], 0., 1.)
+        image, ymin, xmin, ymax, xmax = tf.cond(
+            rp < rotate_prob,
+            lambda: rotate_helper(image, angmin, angmax, ymin, xmin, ymax, xmax, output_h_f, output_w_f),
+            lambda: (image, ymin, xmin, ymax, xmax)
+        )
+
     if data_format == 'channels_first':
         image = tf.transpose(image, [2, 0, 1])
     if ground_truth is not None:
+        ymin = tf.where(ymin < 0., ymin-ymin, ymin)
+        xmin = tf.where(xmin < 0., xmin-xmin, xmin)
+        ymax = tf.where(ymax < 0., ymax-ymax, ymax)
+        xmax = tf.where(xmax < 0., xmax-xmax, xmax)
+        ymin = tf.where(ymin > output_h_f - 1., ymin-ymin+output_h_f - 1., ymin)
+        xmin = tf.where(xmin > output_w_f - 1., xmin-xmin+output_w_f - 1., xmin)
+        ymax = tf.where(ymax > output_h_f - 1., ymax-ymax+output_h_f - 1., ymax)
+        xmax = tf.where(xmax > output_w_f - 1., xmax-xmax+output_w_f - 1., xmax)
         y_center = (ymin + ymax) / 2.
         x_center = (xmin + xmax) / 2.
-        y_mask = tf.cast(y_center > 0., tf.float32) * tf.cast(y_center < output_h - 1., tf.float32)
-        x_mask = tf.cast(x_center > 0., tf.float32) * tf.cast(x_center < output_w - 1., tf.float32)
+        y_mask = tf.cast(y_center > 0., tf.float32) * tf.cast(y_center < output_h_f - 1., tf.float32)
+        x_mask = tf.cast(x_center > 0., tf.float32) * tf.cast(x_center < output_w_f - 1., tf.float32)
         mask = tf.reshape((x_mask * y_mask) > 0., [-1])
         ymin = tf.boolean_mask(ymin, mask)
         xmin = tf.boolean_mask(xmin, mask)
         ymax = tf.boolean_mask(ymax, mask)
         xmax = tf.boolean_mask(xmax, mask)
         class_id = tf.boolean_mask(class_id, mask)
-        ymin = tf.where(ymin < 0., ymin - ymin, ymin)
-        xmin = tf.where(xmin < 0., xmin - xmin, xmin)
-        ymax = tf.where(ymax < 0., ymax - ymax, ymax)
-        xmax = tf.where(xmax < 0., xmax - xmax, xmax)
-        ymin = tf.where(ymin > output_h - 1., ymin - ymin + output_h - 1., ymin)
-        xmin = tf.where(xmin > output_w - 1., xmin - xmin + output_w - 1., xmin)
-        ymax = tf.where(ymax > output_h - 1., ymax - ymax + output_h - 1., ymax)
-        xmax = tf.where(xmax > output_w - 1., xmax - xmax + output_w - 1., xmax)
-        y = (ymin + ymax) / 2.
-        x = (xmin + xmax) / 2.
-        h = ymax - ymin
-        w = xmax - xmin
-        ground_truth_ = tf.concat([y, x, h, w, class_id], axis=-1)
 
-        if tf.shape(ground_truth_)[0] == 0:
-            if pad_truth_to is not None:
-                ground_truth_ = tf.concat([yy, xx, hh, ww, class_id], axis=-1)
-                ground_truth = tf.pad(
-                                ground_truth_, [[0, pad_truth_to-tf.shape(ground_truth)[0]], [0, 0]],
-                                constant_values=-1.0
-                            )
-            return image_copy, ground_truth
-        else:
-            if pad_truth_to is not None:
-                ground_truth = tf.pad(
-                                ground_truth_, [[0, pad_truth_to-tf.shape(ground_truth_)[0]], [0, 0]],
-                                constant_values=-1.0
-                            )
-            return image, ground_truth
+        ground_truth = tf.concat([y_center, x_center, ymax-ymin, xmax-xmin, class_id], axis=-1)
+
+        image, ground_truth = tf.cond(
+            tf.shape(ymin)[0] <= 0,
+            lambda: gt_checker_helper(image_copy, ground_truth_copy, output_shape, output_h_f / input_h_f,
+                                      output_w_f / input_w_f),
+            lambda: (image, ground_truth)
+        )
+
+    if pad_truth_to is not None:
+        ground_truth = tf.pad(
+                        ground_truth, [[0, pad_truth_to-tf.shape(ground_truth)[0]], [0, 0]],
+                        constant_values=-1.0
+                    )
+        return image_copy, ground_truth
     else:
         return image
 
+
+def rotate_helper(img, angmn, angmx, ymn, xmn, ymx, xmx, outh, outw):
+    ang = tf.random.uniform([], angmn, angmx) * 3.1415926 / 180.
+    img = tf.contrib.image.rotate(img, ang, 'BILINEAR')
+    ang = -ang
+    rotate_center_x = (outw - 1.) / 2.
+    rotate_center_y = (outh - 1.) / 2.
+    offset_x = rotate_center_x * (1 - tf.cos(ang)) + rotate_center_y * tf.sin(ang)
+    offset_y = rotate_center_y * (1 - tf.cos(ang)) - rotate_center_x * tf.sin(ang)
+    xmnymn_x = xmn * tf.cos(ang) - ymn * tf.sin(ang) + offset_x
+    xmnymn_y = xmn * tf.sin(ang) + ymn * tf.cos(ang) + offset_y
+    xmxymx_x = xmx * tf.cos(ang) - ymx * tf.sin(ang) + offset_x
+    xmxymx_y = xmx * tf.sin(ang) + ymx * tf.cos(ang) + offset_y
+    xmnymx_x = xmn * tf.cos(ang) - ymx * tf.sin(ang) + offset_x
+    xmnymx_y = xmn * tf.sin(ang) + ymx * tf.cos(ang) + offset_y
+    xmxymn_x = xmx * tf.cos(ang) - ymn * tf.sin(ang) + offset_x
+    xmxymn_y = xmx * tf.sin(ang) + ymn * tf.cos(ang) + offset_y
+    xmn = tf.reduce_min(tf.concat([xmnymn_x, xmxymx_x, xmnymx_x, xmxymn_x], axis=-1), axis=-1,
+                        keepdims=True)
+    ymn = tf.reduce_min(tf.concat([xmnymn_y, xmxymx_y, xmnymx_y, xmxymn_y], axis=-1), axis=-1,
+                        keepdims=True)
+    xmx = tf.reduce_max(tf.concat([xmnymn_x, xmxymx_x, xmnymx_x, xmxymn_x], axis=-1), axis=-1,
+                        keepdims=True)
+    ymx = tf.reduce_max(tf.concat([xmnymn_y, xmxymx_y, xmnymx_y, xmxymn_y], axis=-1), axis=-1,
+                        keepdims=True)
+    return img, ymn, xmn, ymx, xmx
+
+
+def gt_checker_helper(image, ground_truth, size, h_ratio, w_ratio):
+    image = tf.image.resize(image, size)
+    fact = tf.reshape([h_ratio, w_ratio, h_ratio, w_ratio, 1.], [1, 5])
+    ground_truth = ground_truth * fact
+    return image, ground_truth
