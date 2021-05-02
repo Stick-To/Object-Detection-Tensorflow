@@ -31,6 +31,7 @@ class SSD512:
         self.reader = wrap.NewCheckpointReader(config['pretraining_weight'])
 
         if self.mode == 'train':
+            self.is_training = True
             self.num_train = data_provider['num_train']
             self.num_val = data_provider['num_val']
             self.train_generator = data_provider['train_generator']
@@ -38,9 +39,11 @@ class SSD512:
             if data_provider['val_generator'] is not None:
                 self.val_generator = data_provider['val_generator']
                 self.val_initializer, self.val_iterator = self.val_generator
+        else:
+            self.is_training = False
 
         self.global_step = tf.get_variable(name='global_step', initializer=tf.constant(0), trainable=False)
-        self.is_training = True
+        
 
         self._define_inputs()
         self._build_graph()
@@ -478,7 +481,7 @@ class SSD512:
             self.summary_op = tf.summary.merge_all()
 
     def train_one_epoch(self, lr):
-        self.is_training = True
+        assert self.is_training == True
         self.sess.run(self.train_initializer)
         mean_loss = []
         num_iters = self.num_train // self.batch_size
@@ -492,7 +495,7 @@ class SSD512:
         return mean_loss
 
     def test_one_image(self, images):
-        self.is_training = False
+        assert self.is_training == False
         pred = self.sess.run(self.detection_pred, feed_dict={self.images: images})
         return pred
 
