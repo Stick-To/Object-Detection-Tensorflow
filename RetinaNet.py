@@ -57,7 +57,6 @@ class RetinaNet:
                 self.val_initializer, self.val_iterator = self.val_generator
 
         self.global_step = tf.get_variable(name='global_step', initializer=tf.constant(0), trainable=False)
-        self.is_training = True
 
         if self.is_pretraining:
             self._define_pretraining_inputs()
@@ -97,6 +96,7 @@ class RetinaNet:
             self.images = self.images - mean
             self.labels = tf.placeholder(tf.int32, [self.batch_size, 1], name='labels')
         self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
+        self.is_training = tf.placeholder(dtype=tf.bool, shape=[], name='is_training')
 
     def _define_detection_inputs(self):
         shape = [self.batch_size]
@@ -115,6 +115,7 @@ class RetinaNet:
             self.images = self.images - mean
             self.ground_truth = tf.placeholder(tf.float32, [self.batch_size, None, 5], name='labels')
         self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
+        self.is_training = tf.placeholder(dtype=tf.bool, shape=[], name='is_training')
 
     def _build_pretraining_graph(self):
         with tf.variable_scope('feature_extractor'):
@@ -473,12 +474,11 @@ class RetinaNet:
         return loss
 
     def _train_pretraining_epoch(self, lr):
-        self.is_training = True
         self.sess.run(self.train_initializer)
         mean_loss = []
         mean_acc = []
         for i in range(self.num_train // self.batch_size):
-            _, loss, acc = self.sess.run([self.train_op, self.loss, self.accuracy], feed_dict={self.lr: lr})
+            _, loss, acc = self.sess.run([self.train_op, self.loss, self.accuracy], feed_dict={self.lr: lr, self.is_training:True})
             mean_loss.append(loss)
             mean_acc.append(acc)
         mean_loss = np.mean(mean_loss)
@@ -486,12 +486,11 @@ class RetinaNet:
         return mean_loss, mean_acc
 
     def _train_detection_epoch(self, lr):
-        self.is_training = True
         self.sess.run(self.train_initializer)
         mean_loss = []
         num_iters = self.num_train // self.batch_size
         for i in range(num_iters):
-            _, loss = self.sess.run([self.train_op, self.loss], feed_dict={self.lr: lr})
+            _, loss = self.sess.run([self.train_op, self.loss], feed_dict={self.lr: lr, self.is_training:True})
             sys.stdout.write('\r>> ' + 'iters '+str(i+1)+str('/')+str(num_iters)+' loss '+str(loss))
             sys.stdout.flush()
             mean_loss.append(loss)
@@ -500,13 +499,11 @@ class RetinaNet:
         return mean_loss
 
     def _test_one_pretraining_image(self, images):
-        self.is_training = False
-        pred = self.sess.run(self.pred, feed_dict={self.images: images})
+        pred = self.sess.run(self.pred, feed_dict={self.images: images, self.is_training:False})
         return pred
 
     def _test_one_detection_image(self, images):
-        self.is_training = False
-        pred = self.sess.run(self.detection_pred, feed_dict={self.images: images})
+        pred = self.sess.run(self.detection_pred, feed_dict={self.images: images, self.is_training:False})
         return pred
 
     def _save_pretraining_weight(self, mode, path):
